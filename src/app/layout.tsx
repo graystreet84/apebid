@@ -38,10 +38,10 @@ export const metadata: Metadata = {
     type: "website",
     images: [
       {
-        url: "/og.png",
+        url: "/og.png?v=2",
         width: 1200,
         height: 630,
-        alt: "apebid.lol",
+        alt: "apebid.lol — Promote your favorite memecoin. Rule the board.",
       },
     ],
   },
@@ -49,7 +49,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "apebid.lol",
     description: OG,
-    images: ["/og.png"],
+    images: ["/og.png?v=2"],
   },
 };
 
