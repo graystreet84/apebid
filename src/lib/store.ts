@@ -233,6 +233,24 @@ async function ensureSchema(c: Client): Promise<void> {
   for (const sql of stmts) {
     await c.execute(sql);
   }
+  await ensureIdentityUnique(c);
+}
+
+async function ensureIdentityUnique(c: Client): Promise<void> {
+  try {
+    const dups = await c.execute(
+      "SELECT identity FROM listings GROUP BY identity HAVING COUNT(*) > 1 LIMIT 1"
+    );
+    if (dups.rows.length) {
+      console.warn("apebid store: skip UNIQUE(identity), duplicates exist");
+      return;
+    }
+    await c.execute(
+      "CREATE UNIQUE INDEX IF NOT EXISTS listings_identity_uidx ON listings (identity)"
+    );
+  } catch (err) {
+    console.warn("apebid store: UNIQUE(identity) not applied", err);
+  }
 }
 
 function listingFromJson(raw: Record<string, unknown>): Listing {
@@ -534,10 +552,12 @@ async function loadData(): Promise<StoreData> {
       return await neonLoad();
     } catch (err) {
       markEmpty(err);
-      return emptyStoreData();
+      throw new StoreUnavailableError();
     }
   }
-  if (backend !== "libsql") return emptyStoreData();
+  if (backend !== "libsql") {
+    throw new StoreUnavailableError();
+  }
   try {
     const c = getClient();
     const [listingsRes, activityRes, sigsRes] = await Promise.all([
@@ -553,8 +573,9 @@ async function loadData(): Promise<StoreData> {
       usedSigs: used,
     };
   } catch (err) {
+    if (err instanceof StoreUnavailableError) throw err;
     markEmpty(err);
-    return emptyStoreData();
+    throw new StoreUnavailableError();
   }
 }
 
@@ -743,6 +764,8 @@ export function emptyStats(): VisitorStats & {
 export function emptyStatePayload() {
   const launchedAt = new Date().toISOString();
   return {
+    ok: false as const,
+    error: "Board store is unavailable.",
     listings: [] as Listing[],
     activity: [] as Activity[],
     events: [] as Activity[],

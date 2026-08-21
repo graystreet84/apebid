@@ -6,11 +6,16 @@ import {
   visitorStats,
   revenueStats,
   emptyStatePayload,
+  StoreUnavailableError,
 } from "@/lib/store";
 import { rankListings } from "@/lib/ranking";
-import { getTokenImages } from "@/lib/tokenImage";
+import { getTokenImages, httpsImageUrl } from "@/lib/tokenImage";
 
 export const dynamic = "force-dynamic";
+
+function failState(status = 503) {
+  return NextResponse.json(emptyStatePayload(), { status });
+}
 
 export async function GET() {
   try {
@@ -31,7 +36,10 @@ export async function GET() {
     let listings = ranked;
     try {
       const images = await getTokenImages(ranked.map((l) => l.mint));
-      listings = ranked.map((l) => ({ ...l, imageUrl: images[l.mint] ?? null }));
+      listings = ranked.map((l) => ({
+        ...l,
+        imageUrl: httpsImageUrl(images[l.mint]) ?? null,
+      }));
     } catch {
       listings = ranked.map((l) => ({ ...l, imageUrl: null }));
     }
@@ -42,6 +50,7 @@ export async function GET() {
       )
       .slice(0, 40);
     return NextResponse.json({
+      ok: true,
       listings,
       activity,
       revenueUnits: revenue.revenueUnits,
@@ -54,6 +63,7 @@ export async function GET() {
     });
   } catch (err) {
     console.error("/api/state failed", err);
-    return NextResponse.json(emptyStatePayload());
+    const status = err instanceof StoreUnavailableError ? 503 : 500;
+    return failState(status);
   }
 }

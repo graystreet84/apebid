@@ -3,7 +3,7 @@ import {
   clientIp,
   isAllowedRpcMethod,
   isRetryableUpstreamStatus,
-  isSameOriginRequest,
+  isAllowedSiteRequest,
   rpcBurstLimited,
   rpcUpstreamHost,
   serverRpcCandidates,
@@ -33,7 +33,7 @@ function fail(status: number, error: string, id: unknown = null) {
 }
 
 export async function POST(req: Request) {
-  if (!isSameOriginRequest(req)) {
+  if (!isAllowedSiteRequest(req)) {
     return fail(403, "RPC proxy is same-origin only.");
   }
 

@@ -12,6 +12,7 @@ import {
   fakeTxEnabled,
   findTreasurySignature,
   inspectTransfer,
+  isDefinitiveVerifyFailure,
   parseHistoryMemo,
   signaturesMatch,
   usedSignatureExists,
@@ -28,7 +29,15 @@ import {
 } from "../src/lib/solscan";
 import { bidMemoData, BID_MAX_AGE_SECONDS, MEMO_PROGRAM_ID } from "../src/lib/memo";
 import { isAllowedClickUrl } from "../src/lib/validate";
-import { canAcceptPaidBid, durableStoreConfigured, hostedStoreConfigured } from "../src/lib/store";
+import { apeEnabled, applyBoardState, clientBidPlan, isHealthyBoardState } from "../src/lib/boardClient";
+import {
+  clearPendingBid,
+  PENDING_BID_KEY,
+  readPendingBid,
+  writePendingBid,
+} from "../src/lib/pendingBid";
+import { httpsImageUrl } from "../src/lib/tokenImage";
+import { canAcceptPaidBid, durableStoreConfigured, emptyStatePayload, hostedStoreConfigured } from "../src/lib/store";
 import { neonUrl } from "../src/lib/storeNeon";
 import {
   OFFICIAL_RPC,
@@ -37,6 +46,8 @@ import {
   isAllowedRpcMethod,
   isOfficialRpc,
   isRetryableUpstreamStatus,
+  isAllowedSiteOrigin,
+  isAllowedSiteRequest,
   isSameOriginRequest,
   rpcBurstLimited,
   serverRpcCandidates,
@@ -147,6 +158,11 @@ test("fake tx disabled when VERCEL_ENV=production", () => {
     delete env.VERCEL_ENV;
     env.VERCEL = "1";
     env.NODE_ENV = "production";
+    env.DEV_FAKE_TX = "true";
+    assert.equal(fakeTxEnabled(), false);
+
+    env.VERCEL_ENV = "preview";
+    env.VERCEL = "1";
     env.DEV_FAKE_TX = "true";
     assert.equal(fakeTxEnabled(), false);
   } finally {
@@ -538,7 +554,7 @@ test("clickUrl host allowlist", () => {
   assert.equal(isAllowedClickUrl("https://www.pump.fun/coin/" + MINT), true);
   assert.equal(isAllowedClickUrl("https://solscan.io/token/" + MINT), true);
   assert.equal(isAllowedClickUrl("https://www.solscan.io/token/" + MINT), true);
-  assert.equal(isAllowedClickUrl("http://solscan.io/token/" + MINT), true);
+  assert.equal(isAllowedClickUrl("http://solscan.io/token/" + MINT), false);
   assert.equal(isAllowedClickUrl("https://evil.example/coin/" + MINT), false);
   assert.equal(isAllowedClickUrl("https://pump.fun.evil.example/"), false);
   assert.equal(isAllowedClickUrl("https://not-solscan.io/token/" + MINT), false);
@@ -764,6 +780,9 @@ test("not-confirmed record errors retry; memo and amount errors do not", () => {
     isRetryableRecordError("Transaction not found / not confirmed yet."),
     true
   );
+  assert.equal(isRetryableRecordError("Board store is unavailable."), true);
+  assert.equal(isRetryableRecordError("bid failed (503)"), true);
+  assert.equal(isRetryableRecordError("Payment memo is missing."), true);
   assert.equal(isRetryableRecordError("Payment memo does not match this listing."), false);
   assert.equal(isRetryableRecordError("Amount mismatch: treasury gained 1 lamports, expected 50000000."), false);
   assert.equal(isRetryableRecordError("Transaction failed on-chain."), false);
@@ -871,6 +890,290 @@ test("bid priority fee is modest and adds no extra signer", () => {
   for (const ix of ixs) {
     assert.equal(ix.keys.filter((k) => k.isSigner).length, 0);
   }
+});
+
+test("Ape is disabled until a successful state load", () => {
+  assert.equal(apeEnabled({ boardReady: false, pendingSig: null, busy: false }), false);
+  assert.equal(apeEnabled({ boardReady: true, pendingSig: null, busy: false }), true);
+  assert.equal(apeEnabled({ boardReady: true, pendingSig: "sig", busy: false }), false);
+  assert.equal(apeEnabled({ boardReady: true, pendingSig: null, busy: true }), false);
+});
+
+test("/api/state failure is not treated as an empty board", () => {
+  const prev = [
+    {
+      id: "pump",
+      identity: MINT,
+      mint: MINT,
+      clickUrl: `https://pump.fun/coin/${MINT}`,
+      ticker: "PUMP",
+      name: "PUMP",
+      tagline: "",
+      bidUnits: 50,
+      paidUnits: 50,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      clicks: 1,
+      rank: 1,
+    },
+  ];
+  assert.equal(isHealthyBoardState(false, { ok: true, listings: [] }), false);
+  assert.equal(isHealthyBoardState(true, { ok: false, error: "down", listings: [] }), false);
+  assert.equal(isHealthyBoardState(true, { listings: [] }), false);
+  assert.equal(isHealthyBoardState(true, emptyStatePayload()), false);
+  assert.equal(emptyStatePayload().ok, false);
+
+  const failed = applyBoardState({
+    prevListings: prev,
+    prevReady: true,
+    resOk: true,
+    data: { ok: false, error: "Board store is unavailable.", listings: [] },
+  });
+  assert.equal(failed.applied, false);
+  assert.equal(failed.boardReady, true);
+  assert.equal(failed.listings, prev);
+  assert.equal(failed.listings[0]?.ticker, "PUMP");
+
+  const firstFail = applyBoardState({
+    prevListings: [],
+    prevReady: false,
+    resOk: false,
+    data: { listings: [] },
+  });
+  assert.equal(firstFail.boardReady, false);
+  assert.deepEqual(firstFail.listings, []);
+
+  const healthyEmpty = applyBoardState({
+    prevListings: prev,
+    prevReady: true,
+    resOk: true,
+    data: { ok: true, listings: [] },
+  });
+  assert.equal(healthyEmpty.applied, true);
+  assert.equal(healthyEmpty.boardReady, true);
+  assert.deepEqual(healthyEmpty.listings, []);
+});
+
+test("first-paint listings=[] does not compute a new payUnits that gets sent", () => {
+  const plan = clientBidPlan({
+    boardReady: false,
+    listings: [],
+    identity: MINT,
+    bidUnits: 5,
+  });
+  assert.equal(plan.canPay, false);
+  if (plan.canPay === false) assert.equal(plan.reason, "board-not-ready");
+
+  const readyNew = clientBidPlan({
+    boardReady: true,
+    listings: [],
+    identity: MINT,
+    bidUnits: 5,
+  });
+  assert.equal(readyNew.canPay, true);
+  if (readyNew.canPay) {
+    assert.equal(readyNew.isRaise, false);
+    assert.equal(readyNew.payUnits, 5);
+  }
+
+  const raise = clientBidPlan({
+    boardReady: true,
+    listings: [{ identity: MINT, bidUnits: 10 }],
+    identity: MINT,
+    bidUnits: 15,
+  });
+  assert.equal(raise.canPay, true);
+  if (raise.canPay) {
+    assert.equal(raise.isRaise, true);
+    assert.equal(raise.payUnits, 5);
+  }
+});
+
+test("pendingSig survives remount via sessionStorage", () => {
+  const mem = new Map<string, string>();
+  const storage = {
+    getItem: (k: string) => mem.get(k) ?? null,
+    setItem: (k: string, v: string) => {
+      mem.set(k, v);
+    },
+    removeItem: (k: string) => {
+      mem.delete(k);
+    },
+  };
+  writePendingBid(
+    { signature: "sig111", identity: MINT, amountSol: 0.05 },
+    storage
+  );
+  assert.equal(mem.has(PENDING_BID_KEY), true);
+  const restored = readPendingBid(storage);
+  assert.ok(restored);
+  assert.equal(restored?.signature, "sig111");
+  assert.equal(restored?.identity, MINT);
+  assert.equal(restored?.amountSol, 0.05);
+  assert.equal(apeEnabled({ boardReady: true, pendingSig: restored!.signature }), false);
+  clearPendingBid(storage);
+  assert.equal(readPendingBid(storage), null);
+});
+
+test("treasury history memo matching mint lists the paid tx", () => {
+  const now = 1_800_000_000;
+  const tx = mockTx({ lamports: 50_000_000, memo: null, blockTime: now - 30 });
+  const viaParsed = decideTransferVerification({
+    status: { err: null, confirmationStatus: "finalized" },
+    tx,
+    history: { memo: bidMemoData(MINT), blockTime: now - 30, err: null },
+    payUnits: 5,
+    mint: MINT,
+    nowSec: now,
+    treasury: TREASURY,
+  });
+  assert.equal(viaParsed.ok, true);
+
+  const prefixed = decideTransferVerification({
+    status: { err: null, confirmationStatus: "finalized" },
+    tx: null,
+    history: {
+      memo: `[50] ${bidMemoData(MINT)}`,
+      blockTime: now - 20,
+      err: null,
+    },
+    payUnits: 5,
+    mint: MINT,
+    nowSec: now,
+    treasury: TREASURY,
+  });
+  assert.equal(prefixed.ok, true);
+  assert.equal(parseHistoryMemo(`[50] ${bidMemoData(MINT)}`), bidMemoData(MINT));
+});
+
+test("explorer missing blockTime fails like inspectTransfer", () => {
+  const now = 1_800_000_000;
+  const check = inspectExplorerTransfer(
+    {
+      success: true,
+      blockTime: null,
+      treasuryLamports: 50_000_000,
+      memos: [bidMemoData(MINT)],
+    },
+    5,
+    MINT,
+    { nowSec: now }
+  );
+  assert.equal(check.ok, false);
+  if (!check.ok) assert.match(check.error, /time is unavailable/);
+});
+
+test("parsed transfer with no memo retries and can use explorer", () => {
+  const now = 1_800_000_000;
+  const tx = mockTx({ lamports: 50_000_000, memo: null, blockTime: now - 30 });
+  const missing = decideTransferVerification({
+    status: { err: null, confirmationStatus: "finalized" },
+    tx,
+    payUnits: 5,
+    mint: MINT,
+    nowSec: now,
+    treasury: TREASURY,
+  });
+  assert.equal(missing.ok, false);
+  if (!missing.ok) assert.match(missing.error, /not found|not confirmed yet/);
+  assert.equal(isDefinitiveVerifyFailure(missing), false);
+  assert.equal(isRetryableRecordError(missing.error), true);
+
+  const viaExplorer = decideTransferVerification({
+    status: { err: null, confirmationStatus: "finalized" },
+    tx,
+    explorer: {
+      success: true,
+      blockTime: now - 30,
+      treasuryLamports: 50_000_000,
+      memos: [bidMemoData(MINT)],
+    },
+    payUnits: 5,
+    mint: MINT,
+    nowSec: now,
+    treasury: TREASURY,
+  });
+  assert.equal(viaExplorer.ok, true);
+});
+
+test("bid and rpc origins are pinned to apebid hosts, not x-forwarded-host", () => {
+  const req = (headers: Record<string, string>, url = "https://apebid.lol/api/bid") =>
+    new Request(url, { method: "POST", headers });
+
+  assert.equal(isAllowedSiteOrigin("https://apebid.lol"), true);
+  assert.equal(isAllowedSiteOrigin("https://www.apebid.lol"), true);
+  assert.equal(isAllowedSiteOrigin("https://evil.example"), false);
+  assert.equal(
+    isAllowedSiteRequest(
+      req({
+        origin: "https://evil.example",
+        host: "apebid.lol",
+        "x-forwarded-host": "apebid.lol",
+        "x-forwarded-proto": "https",
+      })
+    ),
+    false
+  );
+  assert.equal(
+    isAllowedSiteRequest(req({ origin: "https://www.apebid.lol" })),
+    true
+  );
+  assert.equal(isAllowedSiteOrigin("https://apebid-git-main.vercel.app"), true);
+});
+
+test("https-only token images and click urls", () => {
+  assert.equal(httpsImageUrl("http://cdn.example/a.png"), null);
+  assert.equal(httpsImageUrl("https://cdn.example/a.png"), "https://cdn.example/a.png");
+  assert.equal(isAllowedClickUrl("https://solscan.io/token/" + MINT), true);
+});
+
+test("source locks: no send until ready, pending restore, verify outside lock", () => {
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const bidForm = readFileSync(join(root, "src/components/BidForm.tsx"), "utf8");
+  assert.match(bidForm, /boardReady/);
+  assert.match(bidForm, /loading board/);
+  assert.match(bidForm, /writePendingBid/);
+  assert.match(bidForm, /readPendingBid/);
+  assert.match(bidForm, /clearPendingBid/);
+  assert.match(bidForm, /apeEnabled/);
+  assert.equal(/paste[\s\S]{0,40}signature/i.test(bidForm), false);
+  assert.equal(bidForm.includes("claimSignature"), false);
+  assert.match(bidForm, /maxLength=\{12\}/);
+  assert.match(bidForm, /maxLength=\{32\}/);
+  assert.match(bidForm, /maxLength=\{140\}/);
+
+  const home = readFileSync(join(root, "src/components/HomeClient.tsx"), "utf8");
+  assert.match(home, /isHealthyBoardState/);
+  assert.match(home, /boardReady/);
+  assert.equal(home.includes("setListings([])"), false);
+
+  const state = readFileSync(join(root, "src/app/api/state/route.ts"), "utf8");
+  assert.match(state, /ok:\s*true/);
+  assert.match(state, /emptyStatePayload/);
+  assert.match(state, /status/);
+
+  const bid = readFileSync(join(root, "src/app/api/bid/route.ts"), "utf8");
+  const lockAt = bid.indexOf("await updateStore");
+  assert.ok(lockAt > 0);
+  assert.equal(bid.slice(lockAt).includes("verifyTransfer"), false);
+  assert.ok(bid.indexOf("verifyTransfer") < lockAt);
+  assert.match(bid, /isAllowedSiteRequest/);
+
+  const rpc = readFileSync(join(root, "src/app/api/rpc/route.ts"), "utf8");
+  assert.match(rpc, /isAllowedSiteRequest/);
+
+  const store = readFileSync(join(root, "src/lib/store.ts"), "utf8");
+  assert.match(store, /StoreUnavailableError/);
+  assert.match(store, /listings_identity_uidx/);
+
+  const layout = readFileSync(join(root, "src/app/layout.tsx"), "utf8");
+  assert.match(layout, /index:\s*true/);
+  assert.match(layout, /og:url|url:\s*"https:\/\/www\.apebid\.lol"/);
+
+  const nextCfg = readFileSync(join(root, "next.config.ts"), "utf8");
+  assert.match(nextCfg, /X-Frame-Options/);
+  assert.match(nextCfg, /DENY/);
+  assert.match(nextCfg, /frame-ancestors 'none'/);
 });
 
 function restoreEnv(prev: Record<string, string | undefined>) {

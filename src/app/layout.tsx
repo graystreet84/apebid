@@ -26,19 +26,30 @@ export const dynamic = "force-dynamic";
 const OG = "Where will you be on the leaderboard when this goes viral?";
 
 export const metadata: Metadata = {
+  metadataBase: new URL("https://www.apebid.lol"),
   title: "apebid.lol",
   description: OG,
-  robots: { index: false, follow: false },
+  robots: { index: true, follow: true },
   openGraph: {
     title: "apebid.lol",
     description: OG,
+    url: "https://www.apebid.lol",
     siteName: "apebid.lol",
     type: "website",
+    images: [
+      {
+        url: "/og.png",
+        width: 1200,
+        height: 630,
+        alt: "apebid.lol",
+      },
+    ],
   },
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title: "apebid.lol",
     description: OG,
+    images: ["/og.png"],
   },
 };
 

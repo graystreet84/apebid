@@ -8,12 +8,16 @@ type CacheEntry = { url: string | null; exp: number };
 
 const mem = new Map<string, CacheEntry>();
 
-function httpUrl(v: unknown): string | null {
+export function httpsImageUrl(v: unknown): string | null {
   if (typeof v !== "string") return null;
   const s = v.trim();
-  if (!s.startsWith("http://") && !s.startsWith("https://")) return null;
+  if (!s.startsWith("https://")) return null;
   if (s.length > 2000) return null;
   return s;
+}
+
+function httpUrl(v: unknown): string | null {
+  return httpsImageUrl(v);
 }
 
 function pickPumpImage(data: unknown): string | null {

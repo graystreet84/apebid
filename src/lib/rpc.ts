@@ -79,6 +79,45 @@ export function rpcUpstreamHost(url = serverRpcUrl()): string {
   }
 }
 
+export const ALLOWED_SITE_ORIGINS = [
+  "https://apebid.lol",
+  "https://www.apebid.lol",
+] as const;
+
+function isHostedVercel(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (
+    env.VERCEL_ENV === "production" ||
+    env.VERCEL_ENV === "preview" ||
+    env.VERCEL === "1"
+  );
+}
+
+export function isAllowedSiteOrigin(
+  origin: string | null | undefined,
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  if (!origin) return false;
+  try {
+    const url = new URL(origin);
+    const normalized = url.origin;
+    if ((ALLOWED_SITE_ORIGINS as readonly string[]).includes(normalized)) {
+      return true;
+    }
+    const host = url.hostname.toLowerCase();
+    if (host.endsWith(".vercel.app")) return true;
+    if (host === "localhost" || host === "127.0.0.1") {
+      return !isHostedVercel(env);
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+export function isAllowedSiteRequest(req: Request): boolean {
+  return isAllowedSiteOrigin(clientRequestOrigin(req));
+}
+
 export function requestOrigin(req: Request): string {
   const incoming = new URL(req.url);
   const proto = (
@@ -116,9 +155,7 @@ export function clientRequestOrigin(req: Request): string | null {
 }
 
 export function isSameOriginRequest(req: Request): boolean {
-  const client = clientRequestOrigin(req);
-  if (!client) return false;
-  return client === requestOrigin(req);
+  return isAllowedSiteRequest(req);
 }
 
 export function clientIp(req: Request): string {

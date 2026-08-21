@@ -1,7 +1,15 @@
 import type { NextConfig } from "next";
 
+const frameHeaders = [
+  { key: "X-Frame-Options", value: "DENY" },
+  { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+];
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  async headers() {
+    return [{ source: "/:path*", headers: frameHeaders }];
+  },
   serverExternalPackages: ["@libsql/client", "@neondatabase/serverless"],
   transpilePackages: [
     "@solana/wallet-adapter-base",
