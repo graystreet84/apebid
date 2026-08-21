@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 process.env.NEXT_PUBLIC_TREASURY_ADDRESS ||=
   "Csx6qmKTzcrSQAVjRRygMQ8RqRJcAPiDNJD5ZnbZyQmt";
@@ -10,16 +13,25 @@ import { isAllowedClickUrl } from "../src/lib/validate";
 import { canAcceptPaidBid, durableStoreConfigured, hostedStoreConfigured } from "../src/lib/store";
 import { neonUrl } from "../src/lib/storeNeon";
 import {
-  BLOCKED_OFFICIAL_RPC,
+  OFFICIAL_RPC,
   PUBLIC_FALLBACK_RPC,
   clientRequestOrigin,
   isAllowedRpcMethod,
-  isBlockedOfficialRpc,
+  isOfficialRpc,
+  isRetryableUpstreamStatus,
   isSameOriginRequest,
   rpcBurstLimited,
+  serverRpcCandidates,
   serverRpcUrl,
 } from "../src/lib/rpc";
 import { RPC_PROXY_PATH, clientRpcEndpoint } from "../src/lib/constants";
+import {
+  DEFAULT_TX_FEE_LAMPORTS,
+  formatSimulateError,
+  simulateTransactionRpcParams,
+  walletCoversBid,
+  walletNeedsSolMessage,
+} from "../src/lib/bidPreflight";
 
 const TREASURY = "Csx6qmKTzcrSQAVjRRygMQ8RqRJcAPiDNJD5ZnbZyQmt";
 const MINT = "So11111111111111111111111111111111111111112";
@@ -213,28 +225,36 @@ test("DATABASE_URL counts as a hosted store on Vercel", () => {
   }
 });
 
-test("official public RPC is treated as blocked", () => {
-  assert.equal(isBlockedOfficialRpc(BLOCKED_OFFICIAL_RPC), true);
-  assert.equal(isBlockedOfficialRpc(BLOCKED_OFFICIAL_RPC + "/"), true);
-  assert.equal(isBlockedOfficialRpc(PUBLIC_FALLBACK_RPC), false);
+test("official public RPC is identified", () => {
+  assert.equal(isOfficialRpc(OFFICIAL_RPC), true);
+  assert.equal(isOfficialRpc(OFFICIAL_RPC + "/"), true);
+  assert.equal(isOfficialRpc(PUBLIC_FALLBACK_RPC), false);
 });
 
-test("serverRpcUrl prefers SOLANA_RPC and skips official public RPC", () => {
+test("serverRpcUrl defaults to official and keeps publicnode as fallback", () => {
   const prev = {
     SOLANA_RPC: process.env.SOLANA_RPC,
     NEXT_PUBLIC_SOLANA_RPC: process.env.NEXT_PUBLIC_SOLANA_RPC,
   };
   try {
     delete process.env.SOLANA_RPC;
-    process.env.NEXT_PUBLIC_SOLANA_RPC = BLOCKED_OFFICIAL_RPC;
-    assert.equal(serverRpcUrl(), PUBLIC_FALLBACK_RPC);
+    delete process.env.NEXT_PUBLIC_SOLANA_RPC;
+    assert.equal(serverRpcUrl(), OFFICIAL_RPC);
+    assert.deepEqual(serverRpcCandidates(), [OFFICIAL_RPC, PUBLIC_FALLBACK_RPC]);
 
     process.env.NEXT_PUBLIC_SOLANA_RPC = PUBLIC_FALLBACK_RPC;
-    assert.equal(serverRpcUrl(), PUBLIC_FALLBACK_RPC);
+    assert.equal(serverRpcUrl(), OFFICIAL_RPC);
 
     process.env.SOLANA_RPC = "https://example-rpc.invalid";
-    process.env.NEXT_PUBLIC_SOLANA_RPC = BLOCKED_OFFICIAL_RPC;
     assert.equal(serverRpcUrl(), "https://example-rpc.invalid");
+    assert.deepEqual(serverRpcCandidates(), [
+      "https://example-rpc.invalid",
+      OFFICIAL_RPC,
+      PUBLIC_FALLBACK_RPC,
+    ]);
+
+    process.env.SOLANA_RPC = OFFICIAL_RPC;
+    assert.deepEqual(serverRpcCandidates(), [OFFICIAL_RPC, PUBLIC_FALLBACK_RPC]);
   } finally {
     restoreEnv(prev);
   }
@@ -247,9 +267,41 @@ test("rpc proxy allowlist covers bid path and blocks admin methods", () => {
   assert.equal(isAllowedRpcMethod("getParsedTransaction"), true);
   assert.equal(isAllowedRpcMethod("getRecentPrioritizationFees"), true);
   assert.equal(isAllowedRpcMethod("simulateTransaction"), true);
+  assert.equal(isAllowedRpcMethod("getBalance"), true);
+  assert.equal(isAllowedRpcMethod("getAccountInfo"), true);
   assert.equal(isAllowedRpcMethod("requestAirdrop"), false);
-  assert.equal(isAllowedRpcMethod("getAccountInfo"), false);
   assert.equal(isAllowedRpcMethod("send"), false);
+});
+
+test("upstream 403/5xx is retryable so official can fall back to publicnode", () => {
+  assert.equal(isRetryableUpstreamStatus(403), true);
+  assert.equal(isRetryableUpstreamStatus(429), true);
+  assert.equal(isRetryableUpstreamStatus(502), true);
+  assert.equal(isRetryableUpstreamStatus(200), false);
+  assert.equal(isRetryableUpstreamStatus(400), false);
+});
+
+test("short wallet status uses the bid amount and does not cover bid+fee", () => {
+  assert.equal(walletNeedsSolMessage(5), "this wallet needs 0.05 SOL + fee");
+  assert.equal(walletNeedsSolMessage(10), "this wallet needs 0.10 SOL + fee");
+  assert.equal(walletCoversBid(49_000_000, 50_000_000, DEFAULT_TX_FEE_LAMPORTS), false);
+  assert.equal(walletCoversBid(50_010_000, 50_000_000, DEFAULT_TX_FEE_LAMPORTS), true);
+});
+
+test("pre-sim RPC params disable sigVerify", () => {
+  const params = simulateTransactionRpcParams("dGVzdA==");
+  assert.equal(params[1].sigVerify, false);
+  assert.equal(params[1].encoding, "base64");
+});
+
+test("simulate error surfaces the RPC error text", () => {
+  assert.match(
+    formatSimulateError(
+      { InstructionError: [0, { Custom: 1 }] },
+      ["Program log: Transfer: insufficient lamports"]
+    ),
+    /insufficient lamports/
+  );
 });
 
 test("rpc proxy is same-origin only", () => {
@@ -299,6 +351,22 @@ test("client wallet RPC is same-origin proxy, not official public RPC", () => {
   assert.equal(RPC_PROXY_PATH, "/api/rpc");
   assert.equal(clientRpcEndpoint(), "/api/rpc");
   assert.equal(clientRpcEndpoint().includes("api.mainnet-beta.solana.com"), false);
+});
+
+test("browser bid/wallet sources never call official public RPC", () => {
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const files = [
+    "src/components/BidForm.tsx",
+    "src/components/WalletProviders.tsx",
+    "src/components/Providers.tsx",
+    "src/lib/bidPreflight.ts",
+    "src/lib/constants.ts",
+  ];
+  for (const file of files) {
+    const src = readFileSync(join(root, file), "utf8");
+    assert.equal(src.includes("https://api.mainnet-beta.solana.com"), false, file);
+    assert.equal(src.includes("https://solana-rpc.publicnode.com"), false, file);
+  }
 });
 
 function restoreEnv(prev: Record<string, string | undefined>) {

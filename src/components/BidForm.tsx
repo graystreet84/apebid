@@ -4,6 +4,13 @@ import { useEffect, useMemo, useState } from "react";
 import { PublicKey, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { MIN_SOL, STEP_SOL, TREASURY_ADDRESS, toLamports, roundSol } from "@/lib/constants";
+import {
+  DEFAULT_TX_FEE_LAMPORTS,
+  formatSimulateError,
+  simulateUnsignedTransaction,
+  walletCoversBid,
+  walletNeedsSolMessage,
+} from "@/lib/bidPreflight";
 import { bidMemoData, MEMO_PROGRAM_ID } from "@/lib/memo";
 import { formatSol, solToUnits, unitsToSol, type RankedListing } from "@/lib/types";
 import { parseIdentity } from "@/lib/validate";
@@ -102,13 +109,24 @@ export function BidForm({ listings, onDone }: Props) {
     }
     setBusy(true);
     try {
-      setStatus("waiting for wallet sig…");
+      const payLamports = toLamports(unitsToSol(payUnits));
+      setStatus("checking wallet…");
+      let lamports: number;
+      try {
+        lamports = await connection.getBalance(publicKey, "confirmed");
+      } catch (err) {
+        setStatus(
+          err instanceof Error ? err.message : "could not read wallet balance"
+        );
+        return;
+      }
+
       const mint = parsed.value.mint;
       const tx = new Transaction().add(
         SystemProgram.transfer({
           fromPubkey: publicKey,
           toPubkey: new PublicKey(TREASURY_ADDRESS),
-          lamports: toLamports(unitsToSol(payUnits)),
+          lamports: payLamports,
         }),
         new TransactionInstruction({
           keys: [{ pubkey: publicKey, isSigner: true, isWritable: false }],
@@ -119,6 +137,40 @@ export function BidForm({ listings, onDone }: Props) {
       const latest = await connection.getLatestBlockhash("confirmed");
       tx.feePayer = publicKey;
       tx.recentBlockhash = latest.blockhash;
+
+      let feeLamports = DEFAULT_TX_FEE_LAMPORTS;
+      try {
+        const fee = await connection.getFeeForMessage(tx.compileMessage(), "confirmed");
+        if (typeof fee.value === "number") feeLamports = fee.value;
+      } catch {
+        /* keep conservative buffer */
+      }
+
+      if (!walletCoversBid(lamports, payLamports, feeLamports)) {
+        setStatus(walletNeedsSolMessage(payUnits));
+        return;
+      }
+
+      setStatus("checking transaction…");
+      const encoded = Buffer.from(
+        tx.serialize({
+          requireAllSignatures: false,
+          verifySignatures: false,
+        })
+      ).toString("base64");
+      let sim;
+      try {
+        sim = await simulateUnsignedTransaction(encoded);
+      } catch (err) {
+        setStatus(err instanceof Error ? err.message : "simulation failed");
+        return;
+      }
+      if (sim.err) {
+        setStatus(formatSimulateError(sim.err, sim.logs));
+        return;
+      }
+
+      setStatus("waiting for wallet sig…");
       const sig = await sendTransaction(tx, connection);
       setStatus(`confirming ${sig.slice(0, 8)}…`);
       await connection.confirmTransaction({ signature: sig, ...latest }, "confirmed");

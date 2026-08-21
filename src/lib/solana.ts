@@ -1,7 +1,7 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 import { TREASURY_ADDRESS } from "./constants";
-import { serverRpcUrl } from "./rpc";
+import { serverRpcCandidates, serverRpcUrl } from "./rpc";
 import {
   BID_MAX_AGE_SECONDS,
   isMemoProgramId,
@@ -185,17 +185,21 @@ export async function verifyTransfer(
   payUnits: number,
   mint: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const connection = new Connection(rpcUrl(), "confirmed");
-  let tx;
-  try {
-    tx = await connection.getParsedTransaction(signature, {
-      commitment: "confirmed",
-      maxSupportedTransactionVersion: 0,
-    });
-  } catch {
-    return { ok: false, error: "Could not fetch the transaction from RPC." };
+  const urls = serverRpcCandidates();
+  let lastError = "Could not fetch the transaction from RPC.";
+  for (const url of urls) {
+    try {
+      const connection = new Connection(url, "confirmed");
+      const tx = await connection.getParsedTransaction(signature, {
+        commitment: "confirmed",
+        maxSupportedTransactionVersion: 0,
+      });
+      return inspectTransfer(tx as ParsedTxLike, payUnits, mint);
+    } catch {
+      lastError = "Could not fetch the transaction from RPC.";
+    }
   }
-  return inspectTransfer(tx as ParsedTxLike, payUnits, mint);
+  return { ok: false, error: lastError };
 }
 
 export function expectedLamports(payUnits: number): number {
