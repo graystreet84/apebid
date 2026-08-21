@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { SignatureUsedError, updateStore } from "@/lib/store";
+import { SignatureUsedError, StoreUnavailableError, canAcceptPaidBid, isDurableStoreReady, updateStore } from "@/lib/store";
 import { parseIdentity, parseBidSol, sanitizeText } from "@/lib/validate";
 import { rankListings } from "@/lib/ranking";
 import { fakeTxEnabled, verifyTransfer } from "@/lib/solana";
@@ -58,6 +58,14 @@ export async function POST(req: Request) {
   if (!fake && !signature) {
     return fail(400, "Missing transaction signature.");
   }
+  if (!fake) {
+    if (!canAcceptPaidBid()) {
+      return fail(503, "Board store is unavailable.");
+    }
+    if (!(await isDurableStoreReady())) {
+      return fail(503, "Board store is unavailable.");
+    }
+  }
 
   try {
     const result = await updateStore(async (store) => {
@@ -87,7 +95,7 @@ export async function POST(req: Request) {
         if (store.usedSignatures.includes(sig)) {
           throw new HttpError(409, "That signature was already used.");
         }
-        const check = await verifyTransfer(sig, payUnits);
+        const check = await verifyTransfer(sig, payUnits, parsedId.value.mint);
         if (!check.ok) {
           throw new HttpError(400, check.error);
         }
@@ -153,6 +161,9 @@ export async function POST(req: Request) {
     }
     if (e instanceof SignatureUsedError) {
       return fail(409, e.message);
+    }
+    if (e instanceof StoreUnavailableError) {
+      return fail(503, e.message);
     }
     console.error(e);
     return fail(500, "Bid failed.");

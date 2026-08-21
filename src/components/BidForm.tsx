@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { PublicKey, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { MIN_SOL, STEP_SOL, TREASURY_ADDRESS, toLamports, roundSol } from "@/lib/constants";
+import { bidMemoData, MEMO_PROGRAM_ID } from "@/lib/memo";
 import { formatSol, solToUnits, unitsToSol, type RankedListing } from "@/lib/types";
 import { parseIdentity } from "@/lib/validate";
 import { previewRank } from "@/lib/ranking";
@@ -102,11 +103,17 @@ export function BidForm({ listings, onDone }: Props) {
     setBusy(true);
     try {
       setStatus("waiting for wallet sig…");
+      const mint = parsed.value.mint;
       const tx = new Transaction().add(
         SystemProgram.transfer({
           fromPubkey: publicKey,
           toPubkey: new PublicKey(TREASURY_ADDRESS),
           lamports: toLamports(unitsToSol(payUnits)),
+        }),
+        new TransactionInstruction({
+          keys: [{ pubkey: publicKey, isSigner: true, isWritable: false }],
+          programId: new PublicKey(MEMO_PROGRAM_ID),
+          data: Buffer.from(bidMemoData(mint), "utf8"),
         })
       );
       const latest = await connection.getLatestBlockhash("confirmed");
