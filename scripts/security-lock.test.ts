@@ -7,7 +7,7 @@ import { unitsToLamports } from "../src/lib/types";
 import { fakeTxEnabled, inspectTransfer, type ParsedTxLike } from "../src/lib/solana";
 import { bidMemoData, BID_MAX_AGE_SECONDS, MEMO_PROGRAM_ID } from "../src/lib/memo";
 import { isAllowedClickUrl } from "../src/lib/validate";
-import { durableStoreConfigured } from "../src/lib/store";
+import { canAcceptPaidBid, durableStoreConfigured, hostedStoreConfigured } from "../src/lib/store";
 import { neonUrl } from "../src/lib/storeNeon";
 
 const TREASURY = "Csx6qmKTzcrSQAVjRRygMQ8RqRJcAPiDNJD5ZnbZyQmt";
@@ -171,6 +171,8 @@ test("production/Vercel without hosted DB is not a durable store", () => {
     delete process.env.TURSO_AUTH_TOKEN;
     delete process.env.DATABASE_URL;
     assert.equal(durableStoreConfigured(), false);
+    assert.equal(hostedStoreConfigured(), false);
+    assert.equal(canAcceptPaidBid(), false);
     assert.equal(neonUrl(), null);
   } finally {
     restoreEnv(prev);
@@ -192,6 +194,8 @@ test("DATABASE_URL counts as a hosted store on Vercel", () => {
     delete process.env.TURSO_AUTH_TOKEN;
     process.env.DATABASE_URL = "postgresql://user:pass@ep-example.neon.tech/neondb";
     assert.equal(durableStoreConfigured(), true);
+    assert.equal(hostedStoreConfigured(), true);
+    assert.equal(canAcceptPaidBid(), true);
     assert.ok(neonUrl());
   } finally {
     restoreEnv(prev);

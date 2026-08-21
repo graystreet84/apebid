@@ -148,6 +148,18 @@ export function durableStoreConfigured(): boolean {
   return canUseFileStore();
 }
 
+function isHostedDeploy(): boolean {
+  return Boolean(process.env.VERCEL) ||
+    process.env.VERCEL_ENV === "production" ||
+    process.env.VERCEL_ENV === "preview";
+}
+
+/** Real paid bids require a hosted DB on Vercel. File sqlite is local/dev only. */
+export function canAcceptPaidBid(): boolean {
+  if (isHostedDeploy()) return hostedStoreConfigured();
+  return durableStoreConfigured();
+}
+
 function getClient(): Client {
   if (client) return client;
   const url = dbUrl();

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { SignatureUsedError, StoreUnavailableError, hostedStoreConfigured, isDurableStoreReady, updateStore } from "@/lib/store";
+import { SignatureUsedError, StoreUnavailableError, canAcceptPaidBid, isDurableStoreReady, updateStore } from "@/lib/store";
 import { parseIdentity, parseBidSol, sanitizeText } from "@/lib/validate";
 import { rankListings } from "@/lib/ranking";
 import { fakeTxEnabled, verifyTransfer } from "@/lib/solana";
@@ -59,11 +59,7 @@ export async function POST(req: Request) {
     return fail(400, "Missing transaction signature.");
   }
   if (!fake) {
-    const hostedOnly =
-      Boolean(process.env.VERCEL) ||
-      process.env.VERCEL_ENV === "production" ||
-      process.env.VERCEL_ENV === "preview";
-    if (hostedOnly && !hostedStoreConfigured()) {
+    if (!canAcceptPaidBid()) {
       return fail(503, "Board store is unavailable.");
     }
     if (!(await isDurableStoreReady())) {
