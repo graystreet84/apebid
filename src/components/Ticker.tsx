@@ -17,10 +17,10 @@ export function Ticker({ initial }: { initial: TickerStats }) {
     let dead = false;
     async function tick() {
       try {
-        const data = await fetch("/api/state", { cache: "no-store" }).then((r) =>
-          r.json()
-        );
+        const res = await fetch("/api/state", { cache: "no-store" });
+        const data = await res.json();
         if (dead) return;
+        if (!res.ok || data?.ok === false) return;
         const visitors = data.visitors || {};
         setS({
           live: data.live ?? visitors.live ?? 0,

@@ -1,10 +1,18 @@
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { SignatureUsedError, StoreUnavailableError, canAcceptPaidBid, isDurableStoreReady, updateStore } from "@/lib/store";
+import {
+  SignatureUsedError,
+  StoreUnavailableError,
+  canAcceptPaidBid,
+  isDurableStoreReady,
+  readStore,
+  updateStore,
+} from "@/lib/store";
 import { parseIdentity, parseBidSol, sanitizeText } from "@/lib/validate";
 import { rankListings } from "@/lib/ranking";
 import { fakeTxEnabled, usedSignatureExists, verifyTransfer } from "@/lib/solana";
 import { MIN_UNITS } from "@/lib/types";
+import { isAllowedSiteRequest } from "@/lib/rpc";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +41,10 @@ function fail(status: number, error: string) {
 }
 
 export async function POST(req: Request) {
+  if (!isAllowedSiteRequest(req)) {
+    return fail(403, "Forbidden origin.");
+  }
+
   let body: Body;
   try {
     body = (await req.json()) as Body;
@@ -67,6 +79,42 @@ export async function POST(req: Request) {
     }
   }
 
+  let verifyPayUnits = parsedBid.units;
+  try {
+    const snapshot = await readStore();
+    const existing = snapshot.listings.find(
+      (l) => l.identity === parsedId.value.identity
+    );
+    if (existing) {
+      if (parsedBid.units <= existing.bidUnits) {
+        return fail(
+          409,
+          `Raise must be higher than the current bid (${(existing.bidUnits / 100).toFixed(2)} SOL).`
+        );
+      }
+      verifyPayUnits = parsedBid.units - existing.bidUnits;
+    } else if (parsedBid.units < MIN_UNITS) {
+      return fail(400, "New spots start at 0.05 SOL.");
+    }
+  } catch (e) {
+    if (e instanceof StoreUnavailableError) {
+      return fail(503, e.message);
+    }
+    console.error(e);
+    return fail(500, "Bid failed.");
+  }
+
+  let canonicalSignature: string | undefined;
+  if (!fake) {
+    const check = await verifyTransfer(
+      String(signature),
+      verifyPayUnits,
+      parsedId.value.mint
+    );
+    if (!check.ok) return fail(400, check.error);
+    canonicalSignature = check.canonicalSignature;
+  }
+
   try {
     const result = await updateStore(async (store) => {
       const existing = store.listings.find(
@@ -88,6 +136,13 @@ export async function POST(req: Request) {
         throw new HttpError(400, "New spots start at 0.05 SOL.");
       }
 
+      if (!fake && payUnits > verifyPayUnits) {
+        throw new HttpError(
+          409,
+          `Raise must be higher than the current bid (${((parsedBid.units - payUnits) / 100).toFixed(2)} SOL).`
+        );
+      }
+
       if (fake) {
         store.usedSignatures.push(`dev-${Date.now()}`);
       } else {
@@ -95,11 +150,7 @@ export async function POST(req: Request) {
         if (usedSignatureExists(store.usedSignatures, sig)) {
           throw new HttpError(409, "That signature was already used.");
         }
-        const check = await verifyTransfer(sig, payUnits, parsedId.value.mint);
-        if (!check.ok) {
-          throw new HttpError(400, check.error);
-        }
-        const canonical = check.canonicalSignature || sig;
+        const canonical = canonicalSignature || sig;
         if (canonical !== sig && usedSignatureExists(store.usedSignatures, canonical)) {
           throw new HttpError(409, "That signature was already used.");
         }

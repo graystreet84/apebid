@@ -191,7 +191,7 @@ export function isAllowedClickUrl(raw: string): boolean {
   if (!raw) return false;
   try {
     const u = new URL(raw);
-    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    if (u.protocol !== "https:") return false;
     const host = u.hostname.toLowerCase().replace(/^www\./, "");
     return CLICK_HOSTS.has(host);
   } catch {

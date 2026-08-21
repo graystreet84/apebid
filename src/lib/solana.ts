@@ -16,12 +16,10 @@ import {
 import { unitsToLamports } from "./types";
 
 export function fakeTxEnabled(): boolean {
-  if (process.env.VERCEL_ENV === "production") return false;
-  if (process.env.VERCEL === "1" && process.env.VERCEL_ENV === "production") {
-    return false;
-  }
-  if (process.env.VERCEL === "1" && process.env.NODE_ENV === "production") {
-    return false;
+  const vercelEnv = process.env.VERCEL_ENV;
+  if (vercelEnv === "production" || vercelEnv === "preview") return false;
+  if (process.env.VERCEL === "1" && vercelEnv !== "development") {
+    if (process.env.NODE_ENV === "production" || !vercelEnv) return false;
   }
   return process.env.DEV_FAKE_TX === "true";
 }
@@ -139,11 +137,10 @@ function treasuryGainLamports(tx: ParsedTxLike, treasury: string): number {
   return 0;
 }
 
-export function hasInspectableParsedTx(
+export function hasParsedTransfer(
   tx: ParsedTxLike | null | undefined
 ): boolean {
   if (!tx) return false;
-  if (extractMemos(tx).length > 0) return true;
   const ixs = tx.transaction?.message?.instructions ?? [];
   return ixs.some((ix) => {
     if (!ix.parsed || typeof ix.parsed !== "object") return false;
@@ -151,11 +148,18 @@ export function hasInspectableParsedTx(
   });
 }
 
+export function hasInspectableParsedTx(
+  tx: ParsedTxLike | null | undefined
+): boolean {
+  if (!tx) return false;
+  return extractMemos(tx).length > 0 || hasParsedTransfer(tx);
+}
+
 export function inspectTransfer(
   tx: ParsedTxLike | null | undefined,
   payUnits: number,
   mint: string,
-  opts?: { nowSec?: number; treasury?: string }
+  opts?: { nowSec?: number; treasury?: string; skipMemo?: boolean }
 ): { ok: true } | { ok: false; error: string } {
   if (!tx || !tx.meta) {
     return { ok: false, error: "Transaction not found / not confirmed yet." };
@@ -172,12 +176,14 @@ export function inspectTransfer(
     return { ok: false, error: "Transaction is too old." };
   }
 
-  const memos = extractMemos(tx);
-  if (!memos.length) {
-    return { ok: false, error: "Payment memo is missing." };
-  }
-  if (!memos.some((m) => memoMatchesMint(m, mint))) {
-    return { ok: false, error: "Payment memo does not match this listing." };
+  if (!opts?.skipMemo) {
+    const memos = extractMemos(tx);
+    if (!memos.length) {
+      return { ok: false, error: "Payment memo is missing." };
+    }
+    if (!memos.some((m) => memoMatchesMint(m, mint))) {
+      return { ok: false, error: "Payment memo does not match this listing." };
+    }
   }
 
   let treasury: string;
@@ -206,10 +212,16 @@ export function isDefinitiveVerifyFailure(
   result: VerifyResult
 ): result is { ok: false; error: string } {
   if (result.ok) return false;
-  return /failed on-chain|too old|Amount mismatch|memo does not match|memo is missing|Treasury address|time is unavailable/.test(
+  return /failed on-chain|too old|Amount mismatch|memo does not match|Treasury address|time is unavailable/.test(
     result.error
   );
 }
+
+export type TreasuryHistoryHint = {
+  memo?: string | null;
+  blockTime?: number | null;
+  err?: unknown;
+};
 
 export function decideTransferVerification(opts: {
   status: SignatureStatusLike;
@@ -219,32 +231,76 @@ export function decideTransferVerification(opts: {
   nowSec?: number;
   treasury?: string;
   explorer?: ExplorerTransfer | null;
+  history?: TreasuryHistoryHint | null;
 }): VerifyResult {
-  if (opts.status?.err) {
+  if (opts.status?.err || opts.history?.err) {
     return { ok: false, error: "Transaction failed on-chain." };
   }
 
+  const nowSec = opts.nowSec ?? Math.floor(Date.now() / 1000);
+  const historyMemo = parseHistoryMemo(opts.history?.memo);
+  const historyMatches =
+    typeof historyMemo === "string" && memoMatchesMint(historyMemo, opts.mint);
   const tx = opts.tx;
-  if (hasInspectableParsedTx(tx)) {
+  const memos = tx ? extractMemos(tx) : [];
+
+  if (tx && memos.length > 0) {
     return inspectTransfer(tx, opts.payUnits, opts.mint, {
       nowSec: opts.nowSec,
       treasury: opts.treasury,
     });
   }
 
-  if (tx?.meta?.err) {
+  if (tx && hasParsedTransfer(tx)) {
+    const basics = inspectTransfer(tx, opts.payUnits, opts.mint, {
+      nowSec: opts.nowSec,
+      treasury: opts.treasury,
+      skipMemo: true,
+    });
+    if (!basics.ok) return basics;
+    if (historyMatches) {
+      const bt = opts.history?.blockTime ?? tx.blockTime;
+      if (bt == null || !Number.isFinite(bt)) {
+        return { ok: false, error: "Transaction time is unavailable." };
+      }
+      if (nowSec - bt > BID_MAX_AGE_SECONDS) {
+        return { ok: false, error: "Transaction is too old." };
+      }
+      return { ok: true };
+    }
+  } else if (tx?.meta?.err) {
     return { ok: false, error: "Transaction failed on-chain." };
   }
 
   if (opts.explorer) {
-    const explorer = inspectExplorerTransfer(opts.explorer, opts.payUnits, opts.mint, {
-      nowSec: opts.nowSec,
-    });
+    const explorer = inspectExplorerTransfer(
+      {
+        ...opts.explorer,
+        blockTime:
+          opts.explorer.blockTime ??
+          tx?.blockTime ??
+          opts.history?.blockTime ??
+          null,
+      },
+      opts.payUnits,
+      opts.mint,
+      { nowSec: opts.nowSec }
+    );
     if (explorer.ok || isDefinitiveVerifyFailure(explorer)) return explorer;
   }
 
+  if (historyMatches) {
+    const bt = opts.history?.blockTime ?? tx?.blockTime ?? null;
+    if (bt == null || !Number.isFinite(bt)) {
+      return { ok: false, error: "Transaction time is unavailable." };
+    }
+    if (nowSec - bt > BID_MAX_AGE_SECONDS) {
+      return { ok: false, error: "Transaction is too old." };
+    }
+    return { ok: true };
+  }
+
   if (tx?.blockTime != null && Number.isFinite(tx.blockTime)) {
-    const nowSec = opts.nowSec ?? Math.floor(Date.now() / 1000);
     if (nowSec - tx.blockTime > BID_MAX_AGE_SECONDS) {
       return { ok: false, error: "Transaction is too old." };
     }
@@ -434,7 +490,7 @@ async function probeSignature(
           payUnits,
           mint,
         });
-        if (check.ok || hasInspectableParsedTx(tx)) {
+        if (check.ok || isDefinitiveVerifyFailure(check)) {
           return { landedStatus, lastTx, decided: check };
         }
       }
@@ -496,6 +552,19 @@ export async function verifyTransfer(
         confirmationStatus: resolved.confirmationStatus,
       };
     }
+    const fromHistory = decideTransferVerification({
+      status: landedStatus,
+      tx: lastTx,
+      history: resolved,
+      payUnits,
+      mint,
+    });
+    if (fromHistory.ok) {
+      return canonical !== signature
+        ? { ok: true, canonicalSignature: canonical }
+        : fromHistory;
+    }
+    if (isDefinitiveVerifyFailure(fromHistory)) return fromHistory;
     if (resolved.signature !== signature) {
       const second = await probeSignature(resolved.signature, payUnits, mint);
       if (second.lastTx) lastTx = second.lastTx;
@@ -521,6 +590,7 @@ export async function verifyTransfer(
     status: landedStatus,
     tx: lastTx,
     explorer,
+    history: resolved,
     payUnits,
     mint,
   });

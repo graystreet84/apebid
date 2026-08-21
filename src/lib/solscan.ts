@@ -213,10 +213,11 @@ export function inspectExplorerTransfer(
   }
 
   const nowSec = opts?.nowSec ?? Math.floor(Date.now() / 1000);
-  if (ex.blockTime != null && Number.isFinite(ex.blockTime)) {
-    if (nowSec - ex.blockTime > BID_MAX_AGE_SECONDS) {
-      return { ok: false, error: "Transaction is too old." };
-    }
+  if (ex.blockTime == null || !Number.isFinite(ex.blockTime)) {
+    return { ok: false, error: "Transaction time is unavailable." };
+  }
+  if (nowSec - ex.blockTime > BID_MAX_AGE_SECONDS) {
+    return { ok: false, error: "Transaction is too old." };
   }
 
   const needed = unitsToLamports(payUnits);

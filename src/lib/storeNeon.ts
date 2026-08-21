@@ -166,16 +166,36 @@ export async function neonEnsureReady(): Promise<void> {
   `;
 
   const existing = await db`SELECT value FROM meta WHERE "key" = ${"launchedAt"}`;
-  if (existing[0]?.value) return;
-  const earliest = await db`SELECT "createdAt" FROM listings ORDER BY "createdAt" ASC LIMIT 1`;
-  const launchedAt =
-    earliest[0]?.createdAt != null
-      ? str(earliest[0].createdAt)
-      : new Date().toISOString();
-  await db`
-    INSERT INTO meta ("key", value) VALUES (${"launchedAt"}, ${launchedAt})
-    ON CONFLICT ("key") DO UPDATE SET value = EXCLUDED.value
-  `;
+  if (!existing[0]?.value) {
+    const earliest = await db`SELECT "createdAt" FROM listings ORDER BY "createdAt" ASC LIMIT 1`;
+    const launchedAt =
+      earliest[0]?.createdAt != null
+        ? str(earliest[0].createdAt)
+        : new Date().toISOString();
+    await db`
+      INSERT INTO meta ("key", value) VALUES (${"launchedAt"}, ${launchedAt})
+      ON CONFLICT ("key") DO UPDATE SET value = EXCLUDED.value
+    `;
+  }
+  await neonEnsureIdentityUnique();
+}
+
+async function neonEnsureIdentityUnique(): Promise<void> {
+  try {
+    const db = await getSql();
+    const dups = await db.query(
+      "SELECT identity FROM listings GROUP BY identity HAVING COUNT(*) > 1 LIMIT 1"
+    );
+    if (dups.length) {
+      console.warn("apebid neon: skip UNIQUE(identity), duplicates exist");
+      return;
+    }
+    await db.query(
+      "CREATE UNIQUE INDEX IF NOT EXISTS listings_identity_uidx ON listings (identity)"
+    );
+  } catch (err) {
+    console.warn("apebid neon: UNIQUE(identity) not applied", err);
+  }
 }
 
 export async function neonLoad(): Promise<StoreData> {

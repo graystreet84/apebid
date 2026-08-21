@@ -20,16 +20,23 @@ import {
   BID_RECORD_RETRY_WINDOW_MS,
   recordBidWithRetry,
 } from "@/lib/bidRecord";
+import { apeEnabled, clientBidPlan } from "@/lib/boardClient";
+import {
+  clearPendingBid,
+  readPendingBid,
+  writePendingBid,
+} from "@/lib/pendingBid";
 import { WalletButton } from "./WalletButton";
 
 const FAKE_ON = process.env.NEXT_PUBLIC_DEV_FAKE_TX === "true";
 
 type Props = {
   listings: RankedListing[];
+  boardReady: boolean;
   onDone: () => void;
 };
 
-export function BidForm({ listings, onDone }: Props) {
+export function BidForm({ listings, boardReady, onDone }: Props) {
   const { connection } = useConnection();
   const { publicKey, sendTransaction, connected } = useWallet();
   const [identity, setIdentity] = useState("");
@@ -40,6 +47,17 @@ export function BidForm({ listings, onDone }: Props) {
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
   const [pendingSig, setPendingSig] = useState<string | null>(null);
+
+  useEffect(() => {
+    const restored = readPendingBid();
+    if (!restored) return;
+    setPendingSig(restored.signature);
+    setIdentity(restored.identity);
+    setAmount(String(restored.amountSol));
+    setStatus(
+      `paid on-chain. recording ${restored.signature.slice(0, 8)}… do not send a second payment. sig: ${restored.signature}`
+    );
+  }, []);
 
   useEffect(() => {
     const onClaim = (e: Event) => {
@@ -55,11 +73,17 @@ export function BidForm({ listings, onDone }: Props) {
   const bidSol = roundSol(Number(amount) || 0);
   const bidUnits = solToUnits(bidSol);
   const parsed = useMemo(() => parseIdentity(identity), [identity]);
+  const plan = clientBidPlan({
+    boardReady,
+    listings,
+    identity: parsed.ok ? parsed.value.identity : undefined,
+    bidUnits,
+  });
   const existing = parsed.ok
     ? listings.find((l) => l.identity === parsed.value.identity)
     : undefined;
-  const isRaise = Boolean(existing);
-  const payUnits = existing ? Math.max(0, bidUnits - existing.bidUnits) : bidUnits;
+  const isRaise = plan.canPay ? plan.isRaise : Boolean(existing);
+  const payUnits = plan.canPay ? plan.payUnits : 0;
   const liveRank =
     parsed.ok && bidUnits >= 5
       ? previewRank(listings, bidUnits, parsed.value.identity)
@@ -88,7 +112,9 @@ export function BidForm({ listings, onDone }: Props) {
       rank?: number;
       paidUnits?: number;
     };
-    if (!res.ok || !data.ok) throw new Error(data.error || "bid failed");
+    if (!res.ok || !data.ok) {
+      throw new Error(data.error || `bid failed (${res.status})`);
+    }
     return data;
   }
 
@@ -104,6 +130,14 @@ export function BidForm({ listings, onDone }: Props) {
 
   async function onApe() {
     setStatus("");
+    if (!boardReady) {
+      setStatus("loading board…");
+      return;
+    }
+    if (pendingSig) {
+      await onRetryRecord();
+      return;
+    }
     if (!parsed.ok) {
       setStatus(parsed.error);
       return;
@@ -190,10 +224,16 @@ export function BidForm({ listings, onDone }: Props) {
 
       setStatus("waiting for wallet sig…");
       const sig = await sendTransaction(tx, connection);
+      writePendingBid({
+        signature: sig,
+        identity,
+        amountSol: bidSol,
+      });
       setPendingSig(sig);
       setStatus(`recording ${sig.slice(0, 8)}… do not send again`);
       try {
         const data = await recordPaidBid(sig);
+        clearPendingBid();
         setPendingSig(null);
         setStatus(
           `listed at #${data.rank} · paid ${formatSol(data.paidUnits || payUnits)} SOL`
@@ -218,6 +258,7 @@ export function BidForm({ listings, onDone }: Props) {
     setStatus(`recording ${pendingSig.slice(0, 8)}… do not send again`);
     try {
       const data = await recordPaidBid(pendingSig);
+      clearPendingBid();
       setPendingSig(null);
       setStatus(
         `listed at #${data.rank} · paid ${formatSol(data.paidUnits || payUnits)} SOL`
@@ -235,6 +276,10 @@ export function BidForm({ listings, onDone }: Props) {
 
   async function onFake() {
     setStatus("");
+    if (!boardReady) {
+      setStatus("loading board…");
+      return;
+    }
     if (!parsed.ok) {
       setStatus(parsed.error);
       return;
@@ -279,6 +324,8 @@ export function BidForm({ listings, onDone }: Props) {
         value={identity}
         onChange={(e) => setIdentity(e.target.value)}
         placeholder="7xKXtg… or https://pump.fun/coin/…"
+        maxLength={200}
+        disabled={Boolean(pendingSig)}
         className="ugly-input mt-1 w-full px-3 py-2 text-lg"
       />
 
@@ -287,12 +334,14 @@ export function BidForm({ listings, onDone }: Props) {
           value={ticker}
           onChange={(e) => setTicker(e.target.value)}
           placeholder="ticker (opt)"
+          maxLength={12}
           className="ugly-input px-3 py-2"
         />
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="name (opt)"
+          maxLength={32}
           className="ugly-input px-3 py-2"
         />
       </div>
@@ -300,6 +349,7 @@ export function BidForm({ listings, onDone }: Props) {
         value={tagline}
         onChange={(e) => setTagline(e.target.value)}
         placeholder="one-liner (opt)"
+        maxLength={140}
         className="ugly-input mt-2 w-full px-3 py-2"
       />
 
@@ -335,7 +385,9 @@ export function BidForm({ listings, onDone }: Props) {
       </p>
 
       <div className="mt-3 border border-dashed border-hot/70 p-2 text-sm">
-        {parsed.ok ? (
+        {!boardReady ? (
+          <div className="text-white/50">loading board…</div>
+        ) : parsed.ok ? (
           <>
             <div>
               mint: <span className="text-acid">{parsed.value.mint.slice(0, 4)}…{parsed.value.mint.slice(-4)}</span>
@@ -365,7 +417,7 @@ export function BidForm({ listings, onDone }: Props) {
       <div className="mt-4 flex flex-wrap gap-3">
         <button
           type="button"
-          disabled={busy || Boolean(pendingSig)}
+          disabled={!apeEnabled({ boardReady, pendingSig, busy })}
           onClick={onApe}
           className="ugly-cta w-full px-5 py-3 font-smash text-2xl sm:w-auto"
         >
@@ -384,7 +436,7 @@ export function BidForm({ listings, onDone }: Props) {
         {FAKE_ON && (
           <button
             type="button"
-            disabled={busy}
+            disabled={busy || !boardReady}
             onClick={onFake}
             className="border-2 border-white bg-hot px-4 py-2 font-bold text-black hover:bg-white disabled:opacity-50"
           >

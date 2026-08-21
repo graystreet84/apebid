@@ -33,7 +33,8 @@ function TokenThumb({
 }) {
   const [broken, setBroken] = useState(false);
   const letter = (ticker || "?").charAt(0).toUpperCase() || "?";
-  if (!src || broken) {
+  const safe = src && src.startsWith("https://") ? src : null;
+  if (!safe || broken) {
     return (
       <div
         className="flex shrink-0 items-center justify-center border-2 border-black bg-hot font-smash leading-none text-black"
@@ -47,7 +48,7 @@ function TokenThumb({
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src={src}
+      src={safe}
       alt=""
       width={size}
       height={size}
@@ -118,9 +119,23 @@ function PromoCard({ row }: { row: RankedListing }) {
   );
 }
 
-export function Board({ listings }: { listings: RankedListing[] }) {
+export function Board({
+  listings,
+  boardReady = true,
+}: {
+  listings: RankedListing[];
+  boardReady?: boolean;
+}) {
   const top = listings[0];
   const rest = listings.slice(1);
+
+  if (!boardReady && listings.length === 0) {
+    return (
+      <p className="text-center text-sm text-white/50">
+        loading board…
+      </p>
+    );
+  }
 
   if (listings.length === 0) {
     return (

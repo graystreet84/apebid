@@ -1,7 +1,9 @@
 export const BID_RECORD_RETRY_WINDOW_MS = 90_000;
 
 export function isRetryableRecordError(error: string): boolean {
-  return /not found|not confirmed yet/i.test(error);
+  return /not found|not confirmed yet|store is unavailable|503|memo is missing/i.test(
+    error
+  );
 }
 
 export function bidRecordBackoffMs(attempt: number): number {

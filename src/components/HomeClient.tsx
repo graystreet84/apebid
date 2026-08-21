@@ -8,6 +8,7 @@ import {
   type Activity,
   type RankedListing,
 } from "@/lib/types";
+import { isHealthyBoardState } from "@/lib/boardClient";
 import { BidForm } from "./BidForm";
 import { Board } from "./Board";
 import { ActivityFeed } from "./ActivityFeed";
@@ -27,14 +28,17 @@ function goToBidForm(sol: number) {
 export function HomeClient() {
   const [listings, setListings] = useState<RankedListing[]>([]);
   const [events, setEvents] = useState<Activity[]>([]);
+  const [boardReady, setBoardReady] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      const data = await fetch("/api/state", { cache: "no-store" }).then((x) =>
-        x.json()
-      );
+      const res = await fetch("/api/state", { cache: "no-store" });
+      const data: unknown = await res.json();
+      if (!isHealthyBoardState(res.ok, data)) return;
       setListings(data.listings || []);
-      setEvents(data.activity || []);
+      const activity = (data as { activity?: Activity[] }).activity;
+      setEvents(Array.isArray(activity) ? activity : []);
+      setBoardReady(true);
     } catch {
       /* keep last */
     }
@@ -76,12 +80,12 @@ export function HomeClient() {
             : undefined
         }
       >
-        <Board listings={listings} />
+        <Board listings={listings} boardReady={boardReady} />
         <ActivityFeed events={events} />
       </div>
 
       <div className="mx-auto mt-8 max-w-2xl sm:mt-10">
-        <BidForm listings={listings} onDone={refresh} />
+        <BidForm listings={listings} boardReady={boardReady} onDone={refresh} />
       </div>
     </div>
   );
