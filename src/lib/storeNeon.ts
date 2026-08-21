@@ -237,7 +237,6 @@ function listingUpsertQuery(db: NeonSql, l: Listing) {
       "bidUnits" = EXCLUDED."bidUnits",
       "paidUnits" = EXCLUDED."paidUnits",
       "updatedAt" = EXCLUDED."updatedAt",
-      clicks = EXCLUDED.clicks,
       "identityType" = EXCLUDED."identityType",
       display = EXCLUDED.display,
       url = EXCLUDED.url,
@@ -358,4 +357,16 @@ export async function neonSetMeta(key: string, value: string): Promise<void> {
     INSERT INTO meta ("key", value) VALUES (${key}, ${value})
     ON CONFLICT ("key") DO UPDATE SET value = EXCLUDED.value
   `;
+}
+
+export async function neonListingClickUrl(id: string): Promise<string | null> {
+  const db = await getSql();
+  const rows = await db`SELECT "clickUrl" FROM listings WHERE id = ${id} LIMIT 1`;
+  if (!rows.length || rows[0].clickUrl == null) return null;
+  return str(rows[0].clickUrl);
+}
+
+export async function neonIncrementClicks(id: string): Promise<void> {
+  const db = await getSql();
+  await db`UPDATE listings SET clicks = clicks + 1 WHERE id = ${id}`;
 }

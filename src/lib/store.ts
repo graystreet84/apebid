@@ -6,6 +6,8 @@ import {
   isNeonUniqueError,
   neonEnsureReady,
   neonGetMeta,
+  neonIncrementClicks,
+  neonListingClickUrl,
   neonLoad,
   neonPersist,
   neonRevenueStats,
@@ -468,7 +470,6 @@ function listingUpsert(l: Listing): InStatement {
         bidUnits=excluded.bidUnits,
         paidUnits=excluded.paidUnits,
         updatedAt=excluded.updatedAt,
-        clicks=excluded.clicks,
         identityType=excluded.identityType,
         display=excluded.display,
         url=excluded.url,
@@ -801,6 +802,44 @@ export async function getMeta(key: string): Promise<string | null> {
   } catch (err) {
     markEmpty(err);
     return null;
+  }
+}
+
+export async function getListingClickUrl(id: string): Promise<string | null> {
+  if (!id) return null;
+  await init();
+  if (!isDurableBackend()) return null;
+  try {
+    if (backend === "neon") return await neonListingClickUrl(id);
+    const c = getClient();
+    const r = await c.execute({
+      sql: "SELECT clickUrl FROM listings WHERE id = ? LIMIT 1",
+      args: [id],
+    });
+    if (!r.rows.length || r.rows[0].clickUrl == null) return null;
+    return str(r.rows[0].clickUrl);
+  } catch (err) {
+    markEmpty(err);
+    return null;
+  }
+}
+
+export async function incrementListingClicks(id: string): Promise<void> {
+  if (!id) return;
+  await init();
+  if (!isDurableBackend()) return;
+  try {
+    if (backend === "neon") {
+      await neonIncrementClicks(id);
+      return;
+    }
+    const c = getClient();
+    await c.execute({
+      sql: "UPDATE listings SET clicks = clicks + 1 WHERE id = ?",
+      args: [id],
+    });
+  } catch (err) {
+    markEmpty(err);
   }
 }
 

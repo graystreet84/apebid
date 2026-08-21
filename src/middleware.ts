@@ -19,6 +19,7 @@ export function middleware(req: NextRequest) {
       sameSite: "lax",
       path: "/",
       maxAge: YEAR,
+      secure: true,
     });
   }
   return res;

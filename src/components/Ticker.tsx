@@ -10,6 +10,34 @@ export type TickerStats = {
   revenueSol: number;
 };
 
+export function readTickerStats(data: unknown): TickerStats | null {
+  if (!data || typeof data !== "object") return null;
+  const rec = data as Record<string, unknown>;
+  if (rec.ok !== true) return null;
+  const visitors =
+    rec.visitors && typeof rec.visitors === "object"
+      ? (rec.visitors as Record<string, unknown>)
+      : {};
+  const live = rec.live ?? visitors.live;
+  const last12h = rec.last12h ?? visitors.last12h;
+  const sinceLaunch = rec.sinceLaunch ?? visitors.sinceLaunch;
+  const revenueSol =
+    rec.revenueSol ??
+    (typeof rec.revenueUnits === "number" ? rec.revenueUnits / 100 : undefined);
+  const hasStats =
+    typeof live === "number" ||
+    typeof last12h === "number" ||
+    typeof sinceLaunch === "number" ||
+    typeof revenueSol === "number";
+  if (!hasStats) return null;
+  return {
+    live: typeof live === "number" ? live : 0,
+    last12h: typeof last12h === "number" ? last12h : 0,
+    sinceLaunch: typeof sinceLaunch === "number" ? sinceLaunch : 0,
+    revenueSol: typeof revenueSol === "number" ? revenueSol : 0,
+  };
+}
+
 export function Ticker({ initial }: { initial: TickerStats }) {
   const [s, setS] = useState<TickerStats>(initial);
 
@@ -20,16 +48,10 @@ export function Ticker({ initial }: { initial: TickerStats }) {
         const res = await fetch("/api/state", { cache: "no-store" });
         const data = await res.json();
         if (dead) return;
-        if (!res.ok || data?.ok === false) return;
-        const visitors = data.visitors || {};
-        setS({
-          live: data.live ?? visitors.live ?? 0,
-          last12h: data.last12h ?? visitors.last12h ?? 0,
-          sinceLaunch: data.sinceLaunch ?? visitors.sinceLaunch ?? 0,
-          revenueSol:
-            data.revenueSol ??
-            (typeof data.revenueUnits === "number" ? data.revenueUnits / 100 : 0),
-        });
+        if (!res.ok) return;
+        const next = readTickerStats(data);
+        if (!next) return;
+        setS(next);
       } catch {
         /* keep last */
       }

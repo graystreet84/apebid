@@ -11,6 +11,7 @@ import {
   decideTransferVerification,
   fakeTxEnabled,
   findTreasurySignature,
+  historyTreasuryLamports,
   inspectTransfer,
   isDefinitiveVerifyFailure,
   parseHistoryMemo,
@@ -30,13 +31,14 @@ import {
 import { bidMemoData, BID_MAX_AGE_SECONDS, MEMO_PROGRAM_ID } from "../src/lib/memo";
 import { isAllowedClickUrl } from "../src/lib/validate";
 import { apeEnabled, applyBoardState, clientBidPlan, isHealthyBoardState } from "../src/lib/boardClient";
+import { readTickerStats } from "../src/components/Ticker";
 import {
   clearPendingBid,
   PENDING_BID_KEY,
   readPendingBid,
   writePendingBid,
 } from "../src/lib/pendingBid";
-import { httpsImageUrl } from "../src/lib/tokenImage";
+import { httpsImageUrl, isAllowedImageHost } from "../src/lib/tokenImage";
 import { canAcceptPaidBid, durableStoreConfigured, emptyStatePayload, hostedStoreConfigured } from "../src/lib/store";
 import { neonUrl } from "../src/lib/storeNeon";
 import {
@@ -47,6 +49,7 @@ import {
   isOfficialRpc,
   isRetryableUpstreamStatus,
   isAllowedSiteOrigin,
+  bidBurstLimited,
   isAllowedSiteRequest,
   isSameOriginRequest,
   rpcBurstLimited,
@@ -737,6 +740,16 @@ test("rpc burst limiter trips after the window max", () => {
   assert.equal(rpcBurstLimited(key, now + 10_000, 10_000, 40), false);
 });
 
+test("bid burst limiter trips after ~10 requests per 10s", () => {
+  const key = `bid-test-${Date.now()}-${Math.random()}`;
+  const now = 1_800_000_000_000;
+  for (let i = 0; i < 10; i += 1) {
+    assert.equal(bidBurstLimited(key, now, 10_000, 10), false);
+  }
+  assert.equal(bidBurstLimited(key, now, 10_000, 10), true);
+  assert.equal(bidBurstLimited(key, now + 10_000, 10_000, 10), false);
+});
+
 test("client wallet RPC is same-origin proxy, not official public RPC", () => {
   assert.equal(RPC_PROXY_PATH, "/api/rpc");
   assert.equal(clientRpcEndpoint(), "/api/rpc");
@@ -1042,8 +1055,85 @@ test("treasury history memo matching mint lists the paid tx", () => {
     nowSec: now,
     treasury: TREASURY,
   });
-  assert.equal(prefixed.ok, true);
+  assert.equal(prefixed.ok, false);
+  if (!prefixed.ok) assert.match(prefixed.error, /not found|not confirmed yet/);
+  assert.equal(isDefinitiveVerifyFailure(prefixed), false);
   assert.equal(parseHistoryMemo(`[50] ${bidMemoData(MINT)}`), bidMemoData(MINT));
+});
+
+test("history-memo without amount is retryable, not an accept", () => {
+  const now = 1_800_000_000;
+  const check = decideTransferVerification({
+    status: { err: null, confirmationStatus: "finalized" },
+    tx: null,
+    history: {
+      memo: bidMemoData(MINT),
+      blockTime: now - 15,
+      err: null,
+    },
+    payUnits: 5,
+    mint: MINT,
+    nowSec: now,
+    treasury: TREASURY,
+  });
+  assert.equal(check.ok, false);
+  if (!check.ok) assert.match(check.error, /not found|not confirmed yet/);
+  assert.equal(isDefinitiveVerifyFailure(check), false);
+  assert.equal(isRetryableRecordError(check.error), true);
+  assert.equal(historyTreasuryLamports({ memo: bidMemoData(MINT) }), null);
+});
+
+test("history-memo with amount accepts seen >= needed and rejects underpay", () => {
+  const now = 1_800_000_000;
+  const accept = decideTransferVerification({
+    status: { err: null, confirmationStatus: "finalized" },
+    tx: null,
+    history: {
+      memo: bidMemoData(MINT),
+      blockTime: now - 15,
+      err: null,
+      lamports: 50_000_000,
+    },
+    payUnits: 5,
+    mint: MINT,
+    nowSec: now,
+    treasury: TREASURY,
+  });
+  assert.equal(accept.ok, true);
+
+  const overpay = decideTransferVerification({
+    status: null,
+    tx: null,
+    history: {
+      memo: `[50] ${bidMemoData(MINT)}`,
+      blockTime: now - 10,
+      err: null,
+      treasuryLamports: 80_000_000,
+    },
+    payUnits: 5,
+    mint: MINT,
+    nowSec: now,
+    treasury: TREASURY,
+  });
+  assert.equal(overpay.ok, true);
+
+  const underpay = decideTransferVerification({
+    status: { err: null, confirmationStatus: "confirmed" },
+    tx: null,
+    history: {
+      memo: bidMemoData(MINT),
+      blockTime: now - 10,
+      err: null,
+      lamports: 1,
+    },
+    payUnits: 5,
+    mint: MINT,
+    nowSec: now,
+    treasury: TREASURY,
+  });
+  assert.equal(underpay.ok, false);
+  if (!underpay.ok) assert.match(underpay.error, /Amount mismatch/);
+  assert.equal(isDefinitiveVerifyFailure(underpay), true);
 });
 
 test("explorer missing blockTime fails like inspectTransfer", () => {
@@ -1118,12 +1208,56 @@ test("bid and rpc origins are pinned to apebid hosts, not x-forwarded-host", () 
     isAllowedSiteRequest(req({ origin: "https://www.apebid.lol" })),
     true
   );
-  assert.equal(isAllowedSiteOrigin("https://apebid-git-main.vercel.app"), true);
+  assert.equal(isAllowedSiteOrigin("https://apebid-prod.vercel.app"), true);
+  assert.equal(isAllowedSiteOrigin("https://apebid-git-main.vercel.app"), false);
+  assert.equal(isAllowedSiteOrigin("https://evil.vercel.app"), false);
+  assert.equal(isAllowedSiteOrigin("https://random-preview.vercel.app"), false);
+  assert.equal(isAllowedSiteOrigin("http://localhost:3001"), true);
+  assert.equal(
+    isAllowedSiteOrigin("http://localhost:3001", { VERCEL: "1" }),
+    false
+  );
+});
+
+test("visitor cookie is Secure, HttpOnly, SameSite=lax", () => {
+  const root = fileURLToPath(new URL("..", import.meta.url));
+  const mw = readFileSync(join(root, "src/middleware.ts"), "utf8");
+  assert.match(mw, /secure:\s*true/);
+  assert.match(mw, /httpOnly:\s*true/);
+  assert.match(mw, /sameSite:\s*"lax"/);
+  assert.match(mw, /path:\s*"\/"/);
+  assert.match(mw, /apebid-visitor-id/);
+});
+
+test("ticker keeps last-good stats on fail or empty 200 payloads", () => {
+  assert.equal(readTickerStats({ ok: false, live: 0, last12h: 0, sinceLaunch: 0, revenueSol: 0 }), null);
+  assert.equal(readTickerStats({}), null);
+  assert.equal(readTickerStats({ listings: [] }), null);
+  assert.equal(readTickerStats(emptyStatePayload()), null);
+  const good = readTickerStats({
+    ok: true,
+    live: 3,
+    last12h: 12,
+    sinceLaunch: 40,
+    revenueSol: 1.25,
+  });
+  assert.ok(good);
+  assert.equal(good?.live, 3);
+  assert.equal(good?.revenueSol, 1.25);
 });
 
 test("https-only token images and click urls", () => {
   assert.equal(httpsImageUrl("http://cdn.example/a.png"), null);
-  assert.equal(httpsImageUrl("https://cdn.example/a.png"), "https://cdn.example/a.png");
+  assert.equal(httpsImageUrl("https://cdn.example/a.png"), null);
+  assert.equal(httpsImageUrl("https://evil.example/a.png"), null);
+  assert.equal(
+    httpsImageUrl("https://ipfs.io/ipfs/abc"),
+    "https://ipfs.io/ipfs/abc"
+  );
+  assert.equal(isAllowedImageHost("gateway.ipfs.io"), true);
+  assert.equal(isAllowedImageHost("pump.mypinata.cloud"), true);
+  assert.equal(isAllowedImageHost("dd.dexscreener.com"), true);
+  assert.equal(isAllowedImageHost("cdn.example"), false);
   assert.equal(isAllowedClickUrl("https://solscan.io/token/" + MINT), true);
 });
 
@@ -1158,9 +1292,39 @@ test("source locks: no send until ready, pending restore, verify outside lock", 
   assert.equal(bid.slice(lockAt).includes("verifyTransfer"), false);
   assert.ok(bid.indexOf("verifyTransfer") < lockAt);
   assert.match(bid, /isAllowedSiteRequest/);
+  assert.match(bid, /bidBurstLimited/);
 
   const rpc = readFileSync(join(root, "src/app/api/rpc/route.ts"), "utf8");
   assert.match(rpc, /isAllowedSiteRequest/);
+  assert.equal(rpc.includes("x-apebid-rpc-host"), false);
+
+  const rpcLib = readFileSync(join(root, "src/lib/rpc.ts"), "utf8");
+  assert.equal(rpcLib.includes('endsWith(".vercel.app")'), false);
+  assert.match(rpcLib, /apebid-prod\.vercel\.app/);
+
+  const mw = readFileSync(join(root, "src/middleware.ts"), "utf8");
+  assert.match(mw, /secure:\s*true/);
+  assert.match(mw, /httpOnly:\s*true/);
+  assert.match(mw, /sameSite:\s*"lax"/);
+
+  const click = readFileSync(join(root, "src/lib/clickRedirect.ts"), "utf8");
+  assert.match(click, /incrementListingClicks/);
+  assert.equal(click.includes("row.clicks"), false);
+
+  const storeSrc = readFileSync(join(root, "src/lib/store.ts"), "utf8");
+  assert.match(storeSrc, /clicks = clicks \+ 1/);
+  assert.equal(storeSrc.includes("clicks=excluded.clicks"), false);
+
+  const neonSrc = readFileSync(join(root, "src/lib/storeNeon.ts"), "utf8");
+  assert.match(neonSrc, /clicks = clicks \+ 1/);
+  assert.equal(neonSrc.includes("clicks = EXCLUDED.clicks"), false);
+
+  const board = readFileSync(join(root, "src/components/Board.tsx"), "utf8");
+  assert.equal(/href=\{[^}]*imageUrl/.test(board), false);
+
+  const ticker = readFileSync(join(root, "src/components/Ticker.tsx"), "utf8");
+  assert.match(ticker, /readTickerStats/);
+  assert.match(ticker, /if \(!next\) return/);
 
   const store = readFileSync(join(root, "src/lib/store.ts"), "utf8");
   assert.match(store, /StoreUnavailableError/);

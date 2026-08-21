@@ -12,7 +12,7 @@ import { parseIdentity, parseBidSol, sanitizeText } from "@/lib/validate";
 import { rankListings } from "@/lib/ranking";
 import { fakeTxEnabled, usedSignatureExists, verifyTransfer } from "@/lib/solana";
 import { MIN_UNITS } from "@/lib/types";
-import { isAllowedSiteRequest } from "@/lib/rpc";
+import { bidBurstLimited, clientIp, isAllowedSiteRequest } from "@/lib/rpc";
 
 export const dynamic = "force-dynamic";
 
@@ -43,6 +43,9 @@ function fail(status: number, error: string) {
 export async function POST(req: Request) {
   if (!isAllowedSiteRequest(req)) {
     return fail(403, "Forbidden origin.");
+  }
+  if (bidBurstLimited(clientIp(req))) {
+    return fail(429, "Too many bid requests.");
   }
 
   let body: Body;

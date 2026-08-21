@@ -8,12 +8,53 @@ type CacheEntry = { url: string | null; exp: number };
 
 const mem = new Map<string, CacheEntry>();
 
+const IMAGE_HOSTS = new Set([
+  "ipfs.io",
+  "cloudflare-ipfs.com",
+  "cf-ipfs.com",
+  "nftstorage.link",
+  "arweave.net",
+  "pump.fun",
+  "dexscreener.com",
+  "dd.dexscreener.com",
+  "cdn.dexscreener.com",
+  "images.dexscreener.com",
+  "pinata.cloud",
+  "gateway.pinata.cloud",
+  "w3s.link",
+]);
+
+const IMAGE_HOST_SUFFIXES = [
+  ".ipfs.io",
+  ".nftstorage.link",
+  ".arweave.net",
+  ".pump.fun",
+  ".dexscreener.com",
+  ".pinata.cloud",
+  ".mypinata.cloud",
+];
+
+export function isAllowedImageHost(host: string): boolean {
+  const h = host.toLowerCase().replace(/\.$/, "");
+  if (IMAGE_HOSTS.has(h)) return true;
+  if (h.startsWith("www.") && IMAGE_HOSTS.has(h.slice(4))) return true;
+  return IMAGE_HOST_SUFFIXES.some((suffix) => h.endsWith(suffix));
+}
+
 export function httpsImageUrl(v: unknown): string | null {
   if (typeof v !== "string") return null;
   const s = v.trim();
   if (!s.startsWith("https://")) return null;
   if (s.length > 2000) return null;
-  return s;
+  try {
+    const url = new URL(s);
+    if (url.protocol !== "https:") return null;
+    if (url.username || url.password) return null;
+    if (!isAllowedImageHost(url.hostname)) return null;
+    return s;
+  } catch {
+    return null;
+  }
 }
 
 function httpUrl(v: unknown): string | null {

@@ -4,6 +4,13 @@ import { upsertVisitor } from "./store";
 export const VISITOR_COOKIE = "apebid-visitor-id";
 export const VISITOR_HEADER = "x-apebid-visitor-id";
 export const VISITOR_MAX_AGE = 60 * 60 * 24 * 365;
+export const VISITOR_COOKIE_OPTIONS = {
+  httpOnly: true,
+  sameSite: "lax" as const,
+  path: "/",
+  maxAge: VISITOR_MAX_AGE,
+  secure: true,
+};
 
 export async function touchVisitor(): Promise<void> {
   try {
