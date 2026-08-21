@@ -1,5 +1,7 @@
+export const OFFICIAL_RPC = "https://api.mainnet-beta.solana.com";
 export const PUBLIC_FALLBACK_RPC = "https://solana-rpc.publicnode.com";
-export const BLOCKED_OFFICIAL_RPC = "https://api.mainnet-beta.solana.com";
+/** @deprecated Use OFFICIAL_RPC. Official is the server default; browsers still must not call it. */
+export const BLOCKED_OFFICIAL_RPC = OFFICIAL_RPC;
 
 export const ALLOWED_RPC_METHODS = [
   "getLatestBlockhash",
@@ -13,6 +15,8 @@ export const ALLOWED_RPC_METHODS = [
   "simulateTransaction",
   "getBlockHeight",
   "getFeeForMessage",
+  "getBalance",
+  "getAccountInfo",
 ] as const;
 
 const ALLOWED = new Set<string>(ALLOWED_RPC_METHODS);
@@ -21,7 +25,7 @@ export function isAllowedRpcMethod(method: unknown): method is string {
   return typeof method === "string" && ALLOWED.has(method);
 }
 
-export function isBlockedOfficialRpc(url: string): boolean {
+export function isOfficialRpc(url: string): boolean {
   try {
     return new URL(url).hostname.toLowerCase() === "api.mainnet-beta.solana.com";
   } catch {
@@ -29,24 +33,42 @@ export function isBlockedOfficialRpc(url: string): boolean {
   }
 }
 
-function firstAbsoluteRpc(
-  ...candidates: (string | undefined)[]
-): string | null {
-  for (const raw of candidates) {
-    const url = raw?.trim();
-    if (!url || !/^https?:\/\//i.test(url)) continue;
-    if (isBlockedOfficialRpc(url)) continue;
-    return url;
-  }
-  return null;
+export function isBlockedOfficialRpc(url: string): boolean {
+  return isOfficialRpc(url);
 }
 
-/** Server-side RPC only. Paid keys belong in SOLANA_RPC, never NEXT_PUBLIC_*. */
+function normalizedAbsoluteRpc(raw: string | undefined): string | null {
+  const url = raw?.trim();
+  if (!url || !/^https?:\/\//i.test(url)) return null;
+  return url.replace(/\/$/, "");
+}
+
+/**
+ * Server-side RPC only. Default is official mainnet-beta.
+ * publicnode is last-resort if official fails on the server.
+ * Paid keys belong in SOLANA_RPC, never NEXT_PUBLIC_*.
+ */
+export function serverRpcCandidates(): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const add = (raw: string | undefined) => {
+    const url = normalizedAbsoluteRpc(raw);
+    if (!url || seen.has(url)) return;
+    seen.add(url);
+    out.push(url);
+  };
+  add(process.env.SOLANA_RPC);
+  add(OFFICIAL_RPC);
+  add(PUBLIC_FALLBACK_RPC);
+  return out;
+}
+
 export function serverRpcUrl(): string {
-  return (
-    firstAbsoluteRpc(process.env.SOLANA_RPC, process.env.NEXT_PUBLIC_SOLANA_RPC) ||
-    PUBLIC_FALLBACK_RPC
-  );
+  return serverRpcCandidates()[0] || OFFICIAL_RPC;
+}
+
+export function isRetryableUpstreamStatus(status: number): boolean {
+  return status === 403 || status === 408 || status === 429 || status >= 500;
 }
 
 export function rpcUpstreamHost(url = serverRpcUrl()): string {
@@ -62,7 +84,9 @@ export function requestOrigin(req: Request): string {
   const proto = (
     req.headers.get("x-forwarded-proto") ||
     incoming.protocol.replace(":", "")
-  ).split(",")[0].trim();
+  )
+    .split(",")[0]
+    .trim();
   const host = (
     req.headers.get("x-forwarded-host") ||
     req.headers.get("host") ||
