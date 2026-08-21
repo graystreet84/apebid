@@ -8,6 +8,7 @@ import { bidMemoData, MEMO_PROGRAM_ID } from "@/lib/memo";
 import { formatSol, solToUnits, unitsToSol, type RankedListing } from "@/lib/types";
 import { parseIdentity } from "@/lib/validate";
 import { previewRank } from "@/lib/ranking";
+import { WalletButton } from "./WalletButton";
 
 const FAKE_ON = process.env.NEXT_PUBLIC_DEV_FAKE_TX === "true";
 
@@ -164,7 +165,10 @@ export function BidForm({ listings, onDone }: Props) {
 
   return (
     <section className="ugly-box p-3 sm:p-5">
-      <h2 className="font-smash text-xl text-hot sm:text-2xl">APE THE BOARD</h2>
+      <div className="flex items-start justify-between gap-3">
+        <h2 className="font-smash text-xl text-hot sm:text-2xl">APE THE BOARD</h2>
+        <WalletButton />
+      </div>
       <p className="mt-1 text-xs text-white/65 sm:text-sm">
         New spots start at 0.05 SOL. Paying less than #1 still puts you on the
         board.

@@ -122,84 +122,84 @@ export function Board({ listings }: { listings: RankedListing[] }) {
   const top = listings[0];
   const rest = listings.slice(1);
 
+  if (listings.length === 0) {
+    return (
+      <p className="text-center text-sm text-white/50">
+        empty board. be the first ape.
+      </p>
+    );
+  }
+
   return (
     <section className="ugly-box-acid p-3 sm:p-4">
       <h2 className="font-smash text-xl text-acid sm:text-2xl">THE BOARD</h2>
       <p className="mb-3 text-xs text-white/55">
         click-out counts. no swap. pump.fun or solscan.
       </p>
-      {listings.length === 0 ? (
-        <p className="border border-hot/80 p-3 text-sm text-hot">
-          empty board. be the first ape.
-        </p>
-      ) : (
-        <>
-          {top ? <PromoCard row={top} /> : null}
-          {rest.length > 0 ? (
-            <ul className="divide-y divide-white/15">
-              {rest.map((row) => (
-                <li
-                  key={row.id}
-                  className={
-                    row.rank % 2 === 0
-                      ? "bg-[#1a0014] px-1 py-3"
-                      : "bg-black px-1 py-3"
-                  }
-                >
-                  <div className="flex items-start gap-3">
-                    <div className="w-8 shrink-0 font-smash text-2xl leading-none text-yell">
-                      {row.rank}
-                    </div>
-                    <TokenThumb
-                      src={row.imageUrl}
-                      ticker={tokenLabel(row)}
-                      size={36}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <a
-                        href={`/api/click/${row.id}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="font-bold"
-                      >
-                        {tokenLabel(row)}
-                      </a>
-                      <div className="text-[10px] text-white/40">
-                        {row.clickUrl.includes("pump.fun")
-                          ? "pump.fun"
-                          : "solscan"}
-                      </div>
-                      {row.tagline ? (
-                        <div className="mt-0.5 text-xs text-white/70">
-                          {row.tagline}
-                        </div>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="mt-1 block text-xs text-hot underline"
-                        onClick={() => claimRank(row)}
-                      >
-                        claim this rank for {formatSol(row.bidUnits + 1)} SOL
-                      </button>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <div className="font-bold text-acid">
-                        {formatSol(row.bidUnits)} SOL
-                      </div>
-                      <div className="text-xs text-white/50">
-                        {row.clicks} clicks
-                      </div>
-                      <div className="text-[10px] text-white/40">
-                        {timeAgo(row.updatedAt)}
-                      </div>
-                    </div>
+      {top ? <PromoCard row={top} /> : null}
+      {rest.length > 0 ? (
+        <ul className="divide-y divide-white/15">
+          {rest.map((row) => (
+            <li
+              key={row.id}
+              className={
+                row.rank % 2 === 0
+                  ? "bg-[#1a0014] px-1 py-3"
+                  : "bg-black px-1 py-3"
+              }
+            >
+              <div className="flex items-start gap-3">
+                <div className="w-8 shrink-0 font-smash text-2xl leading-none text-yell">
+                  {row.rank}
+                </div>
+                <TokenThumb
+                  src={row.imageUrl}
+                  ticker={tokenLabel(row)}
+                  size={36}
+                />
+                <div className="min-w-0 flex-1">
+                  <a
+                    href={`/api/click/${row.id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-bold"
+                  >
+                    {tokenLabel(row)}
+                  </a>
+                  <div className="text-[10px] text-white/40">
+                    {row.clickUrl.includes("pump.fun")
+                      ? "pump.fun"
+                      : "solscan"}
                   </div>
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </>
-      )}
+                  {row.tagline ? (
+                    <div className="mt-0.5 text-xs text-white/70">
+                      {row.tagline}
+                    </div>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="mt-1 block text-xs text-hot underline"
+                    onClick={() => claimRank(row)}
+                  >
+                    claim this rank for {formatSol(row.bidUnits + 1)} SOL
+                  </button>
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="font-bold text-acid">
+                    {formatSol(row.bidUnits)} SOL
+                  </div>
+                  <div className="text-xs text-white/50">
+                    {row.clicks} clicks
+                  </div>
+                  <div className="text-[10px] text-white/40">
+                    {timeAgo(row.updatedAt)}
+                  </div>
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </section>
   );
 }

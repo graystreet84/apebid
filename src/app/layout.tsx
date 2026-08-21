@@ -1,16 +1,25 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { cookies, headers } from "next/headers";
+import { Anton } from "next/font/google";
 import "./globals.css";
 import { ServerHeader } from "@/components/ServerChrome";
 import Footer from "@/components/Footer";
 import { Ticker } from "@/components/Ticker";
+
 import {
   upsertVisitor,
   visitorStats,
   revenueStats,
   emptyStats,
 } from "@/lib/store";
+
+const smash = Anton({
+  weight: "400",
+  subsets: ["latin"],
+  variable: "--font-smash",
+  display: "swap",
+});
 
 export const dynamic = "force-dynamic";
 
@@ -63,7 +72,7 @@ async function tickerInitial() {
 export default async function RootLayout({ children }: { children: ReactNode }) {
   const initial = await tickerInitial();
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className={`dark ${smash.variable}`}>
       <body className="dark min-h-screen bg-ink font-meme text-white">
         <ServerHeader />
         <Ticker initial={initial} />

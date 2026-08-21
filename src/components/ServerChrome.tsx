@@ -15,9 +15,6 @@ export function ServerHeader() {
         <Link href="/rules" className="font-bold text-hot">
           /rules
         </Link>
-        <span className="text-[10px] font-bold uppercase tracking-wide text-white/45">
-          ● live
-        </span>
       </nav>
     </header>
   );

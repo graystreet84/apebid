@@ -16,6 +16,13 @@ body {
   font-family: "Comic Sans MS", "Comic Sans", "Chalkboard SE", "Comic Neue",
     cursive;
   min-height: 100%;
+  overflow-x: hidden;
+}
+
+.smash-hero {
+  letter-spacing: -0.03em;
+  line-height: 0.95;
+  text-shadow: 3px 3px 0 #ff2d95;
 }
 
 body {
@@ -82,6 +89,21 @@ a:hover {
 
 .ugly-cta:disabled {
   opacity: 0.5;
+}
+
+@media (max-width: 640px) {
+  .ugly-box {
+    box-shadow: 3px 3px 0 #ff2d95;
+  }
+
+  .ugly-box-acid {
+    box-shadow: 3px 3px 0 #ffe600;
+  }
+
+  .ugly-focus,
+  .ugly-cta {
+    box-shadow: 4px 4px 0 #ff2d95;
+  }
 }
 
 @keyframes blink {

@@ -6,7 +6,6 @@ import type { Activity, RankedListing } from "@/lib/types";
 import { BidForm } from "./BidForm";
 import { Board } from "./Board";
 import { ActivityFeed } from "./ActivityFeed";
-import { WalletButton } from "./WalletButton";
 
 export function HomeClient() {
   const [listings, setListings] = useState<RankedListing[]>([]);
@@ -32,12 +31,11 @@ export function HomeClient() {
 
   return (
     <div className="mx-auto max-w-5xl px-3 py-5 sm:px-4 sm:py-7">
-      <div className="mb-3 flex items-center justify-end">
-        <WalletButton />
-      </div>
-      <p className="mb-3 text-center text-xs text-white/50">
-        {listings.length} on the board
-      </p>
+      {listings.length > 0 ? (
+        <p className="mb-3 text-xs text-white/50">
+          {listings.length} on the board
+        </p>
+      ) : null}
       <div id="bid-form" className="grid gap-8 lg:grid-cols-[1fr_260px] lg:gap-10">
         <div className="space-y-8 sm:space-y-10">
           <BidForm listings={listings} onDone={refresh} />
