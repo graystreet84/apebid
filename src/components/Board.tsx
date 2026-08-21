@@ -36,7 +36,7 @@ function TokenThumb({
   if (!src || broken) {
     return (
       <div
-        className="flex shrink-0 items-center justify-center border-4 border-black bg-hot font-smash leading-none text-black"
+        className="flex shrink-0 items-center justify-center border-2 border-black bg-hot font-smash leading-none text-black"
         style={{ width: size, height: size, fontSize: Math.max(12, size * 0.48) }}
         aria-hidden
       >
@@ -51,7 +51,7 @@ function TokenThumb({
       alt=""
       width={size}
       height={size}
-      className="shrink-0 border-4 border-black bg-black object-cover"
+      className="shrink-0 border-2 border-black bg-black object-cover"
       style={{ width: size, height: size }}
       onError={() => setBroken(true)}
     />
@@ -66,40 +66,50 @@ function PromoCard({ row }: { row: RankedListing }) {
   const label = tokenLabel(row);
   const dest = row.clickUrl.includes("pump.fun") ? "pump.fun" : "solscan";
   return (
-    <div className="mb-4">
+    <div className="mb-5">
       <a
         href={`/api/click/${row.id}`}
         target="_blank"
         rel="noreferrer"
         className="block no-underline"
       >
-        <div className="border-4 border-black bg-yell p-4 text-black shadow-[10px_10px_0_#ff2d95]">
-          <div className="flex flex-wrap items-center gap-4">
-            <TokenThumb src={row.imageUrl} ticker={label} size={112} />
+        <div className="ugly-focus p-3 text-black sm:p-4">
+          <div className="flex items-start gap-3">
+            <TokenThumb src={row.imageUrl} ticker={label} size={72} />
             <div className="min-w-0 flex-1">
-              <div className="font-smash text-5xl leading-none text-hot">#1</div>
-              <div className="font-smash text-4xl uppercase leading-none">{label}</div>
+              <div className="font-smash text-4xl leading-none text-hot sm:text-5xl">
+                #1
+              </div>
+              <div className="font-smash text-2xl uppercase leading-none sm:text-3xl">
+                {label}
+              </div>
               {row.name && row.name !== row.ticker ? (
-                <div className="text-lg font-bold">{row.name}</div>
+                <div className="text-sm font-bold sm:text-base">{row.name}</div>
               ) : null}
-              <div className="mt-1 font-smash text-2xl">
+              <div className="mt-1 font-smash text-xl sm:text-2xl">
                 {formatSol(row.bidUnits)} SOL
               </div>
-              {row.tagline ? <div className="text-sm font-bold">{row.tagline}</div> : null}
-              <div className="mt-1 text-xs font-bold uppercase">
+              {row.tagline ? (
+                <div className="text-sm font-bold">{row.tagline}</div>
+              ) : null}
+              <div className="mt-1 text-[10px] font-bold uppercase text-black/70">
                 whole card is the click-out → {dest}
               </div>
             </div>
-            <div className="min-w-[140px] text-center">
-              <div className="font-smash text-7xl leading-none text-hot">{row.clicks}</div>
-              <div className="font-smash text-3xl leading-none text-black">CLICKS</div>
+            <div className="shrink-0 pt-1 text-right">
+              <div className="font-smash text-xl leading-none text-hot sm:text-2xl">
+                {row.clicks}
+              </div>
+              <div className="text-[10px] font-smash tracking-wide text-black/70">
+                CLICKS
+              </div>
             </div>
           </div>
         </div>
       </a>
       <button
         type="button"
-        className="mt-3 border-4 border-black bg-hot px-3 py-1 font-smash text-lg text-black"
+        className="mt-2 border-2 border-black bg-hot px-3 py-1 font-smash text-sm text-black"
         onClick={() => claimRank(row)}
       >
         claim #1 for {formatSol(row.bidUnits + 1)} SOL
@@ -113,90 +123,80 @@ export function Board({ listings }: { listings: RankedListing[] }) {
   const rest = listings.slice(1);
 
   return (
-    <section className="ugly-box-acid overflow-x-auto p-3 sm:p-4">
-      <h2 className="font-smash text-2xl text-acid">THE BOARD</h2>
-      <p className="mb-3 text-xs text-white/70">
+    <section className="ugly-box-acid p-3 sm:p-4">
+      <h2 className="font-smash text-xl text-acid sm:text-2xl">THE BOARD</h2>
+      <p className="mb-3 text-xs text-white/55">
         click-out counts. no swap. pump.fun or solscan.
       </p>
       {listings.length === 0 ? (
-        <p className="border-2 border-hot p-4 text-hot">
+        <p className="border border-hot/80 p-3 text-sm text-hot">
           empty board. be the first ape.
         </p>
       ) : (
         <>
           {top ? <PromoCard row={top} /> : null}
           {rest.length > 0 ? (
-            <table className="w-full min-w-[640px] border-collapse text-left text-sm">
-              <thead>
-                <tr className="bg-hot text-black">
-                  <th className="border-2 border-black px-2 py-1">#</th>
-                  <th className="border-2 border-black px-2 py-1">token</th>
-                  <th className="border-2 border-black px-2 py-1">bid</th>
-                  <th className="border-2 border-black px-2 py-1">clicks</th>
-                  <th className="border-2 border-black px-2 py-1">when</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rest.map((row) => (
-                  <tr
-                    key={row.id}
-                    className={
-                      row.rank % 2 === 0 ? "bg-[#1a0014]" : "bg-black"
-                    }
-                  >
-                    <td className="border-2 border-white/30 px-2 py-2 font-smash text-xl text-yell">
+            <ul className="divide-y divide-white/15">
+              {rest.map((row) => (
+                <li
+                  key={row.id}
+                  className={
+                    row.rank % 2 === 0
+                      ? "bg-[#1a0014] px-1 py-3"
+                      : "bg-black px-1 py-3"
+                  }
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 shrink-0 font-smash text-2xl leading-none text-yell">
                       {row.rank}
-                    </td>
-                    <td className="border-2 border-white/30 px-2 py-2">
-                      <div className="flex items-center gap-2">
-                        <TokenThumb
-                          src={row.imageUrl}
-                          ticker={tokenLabel(row)}
-                          size={28}
-                        />
-                        <div>
-                          <a
-                            href={`/api/click/${row.id}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="font-bold"
-                          >
-                            {tokenLabel(row)}
-                          </a>
-                          <div className="text-[10px] text-white/40">
-                            {row.clickUrl.includes("pump.fun")
-                              ? "pump.fun"
-                              : "solscan"}
-                          </div>
-                        </div>
+                    </div>
+                    <TokenThumb
+                      src={row.imageUrl}
+                      ticker={tokenLabel(row)}
+                      size={36}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <a
+                        href={`/api/click/${row.id}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="font-bold"
+                      >
+                        {tokenLabel(row)}
+                      </a>
+                      <div className="text-[10px] text-white/40">
+                        {row.clickUrl.includes("pump.fun")
+                          ? "pump.fun"
+                          : "solscan"}
                       </div>
-                    </td>
-                    <td className="border-2 border-white/30 px-2 py-2 font-bold text-acid">
-                      {formatSol(row.bidUnits)} SOL
-                    </td>
-                    <td className="border-2 border-white/30 px-2 py-2">
-                      <div className="font-smash text-4xl leading-none text-yell">
-                        {row.clicks}
-                      </div>
-                      <div className="font-smash text-sm text-acid">CLICKS</div>
-                    </td>
-                    <td className="border-2 border-white/30 px-2 py-2 text-white/70">
-                      {timeAgo(row.updatedAt)}
                       {row.tagline ? (
-                        <div className="mt-1 text-white/80">{row.tagline}</div>
+                        <div className="mt-0.5 text-xs text-white/70">
+                          {row.tagline}
+                        </div>
                       ) : null}
                       <button
                         type="button"
-                        className="mt-1 block text-hot underline"
+                        className="mt-1 block text-xs text-hot underline"
                         onClick={() => claimRank(row)}
                       >
                         claim this rank for {formatSol(row.bidUnits + 1)} SOL
                       </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div className="font-bold text-acid">
+                        {formatSol(row.bidUnits)} SOL
+                      </div>
+                      <div className="text-xs text-white/50">
+                        {row.clicks} clicks
+                      </div>
+                      <div className="text-[10px] text-white/40">
+                        {timeAgo(row.updatedAt)}
+                      </div>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
           ) : null}
         </>
       )}

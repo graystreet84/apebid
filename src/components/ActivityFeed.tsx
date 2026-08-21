@@ -4,8 +4,8 @@ import { formatSol, type Activity } from "@/lib/types";
 
 export function ActivityFeed({ events }: { events: Activity[] }) {
   return (
-    <section className="ugly-box p-4">
-      <h2 className="font-smash text-2xl text-yell">JUST APED</h2>
+    <section className="ugly-box p-3 sm:p-4">
+      <h2 className="font-smash text-lg text-yell sm:text-xl">JUST APED</h2>
       {events.length === 0 ? (
         <p className="mt-2 text-sm text-white/50">no activity yet. poll every 5s.</p>
       ) : (
@@ -13,7 +13,7 @@ export function ActivityFeed({ events }: { events: Activity[] }) {
           {events.map((e) => (
             <li
               key={e.id}
-              className="border-2 border-white/20 bg-black px-2 py-1 text-sm"
+              className="border-l-2 border-white/25 bg-black/60 px-2 py-1 text-sm"
             >
               <span className="font-bold text-hot">
                 {e.kind === "raise" ? "RAISE" : "BID"}

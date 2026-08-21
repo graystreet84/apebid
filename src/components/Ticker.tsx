@@ -45,13 +45,13 @@ export function Ticker({ initial }: { initial: TickerStats }) {
   const rev = Number(s.revenueSol || 0).toFixed(2);
 
   return (
-    <div className="apebid-ticker flex flex-wrap items-center justify-center gap-x-4 gap-y-1 border-b-4 border-hot bg-black px-3 py-2 text-center text-sm font-bold">
+    <div className="apebid-ticker flex flex-wrap items-center justify-center gap-x-4 gap-y-1 border-b-2 border-hot/80 bg-black px-3 py-1.5 text-center text-xs font-bold sm:text-sm">
       <span className="text-acid">
         <span className="blink">●</span> {s.live} LIVE now
       </span>
       <span className="text-yell">{s.last12h} last 12h</span>
       <span className="text-hot">{s.sinceLaunch} since launch</span>
-      <span className="text-acid">{rev} SOL paid / revenue</span>
+      <span className="text-white/70">{rev} SOL paid / revenue</span>
     </div>
   );
 }

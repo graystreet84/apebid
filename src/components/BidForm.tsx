@@ -163,42 +163,42 @@ export function BidForm({ listings, onDone }: Props) {
   }
 
   return (
-    <section className="ugly-box p-4 sm:p-5">
-      <h2 className="font-smash text-2xl text-hot">APE THE BOARD</h2>
-      <p className="mt-1 text-sm text-white/80">
+    <section className="ugly-box p-3 sm:p-5">
+      <h2 className="font-smash text-xl text-hot sm:text-2xl">APE THE BOARD</h2>
+      <p className="mt-1 text-xs text-white/65 sm:text-sm">
         New spots start at 0.05 SOL. Paying less than #1 still puts you on the
         board.
       </p>
 
-      <label className="mt-4 block text-xs uppercase text-yell">
+      <label className="mt-3 block text-xs uppercase text-yell">
         CA / pump.fun
       </label>
       <input
         value={identity}
         onChange={(e) => setIdentity(e.target.value)}
         placeholder="7xKXtg… or https://pump.fun/coin/…"
-        className="mt-1 w-full border-4 border-white bg-black px-3 py-2 text-lg text-acid outline-none"
+        className="ugly-input mt-1 w-full px-3 py-2 text-lg"
       />
 
-      <div className="mt-3 grid grid-cols-2 gap-2">
+      <div className="mt-2 grid grid-cols-2 gap-2">
         <input
           value={ticker}
           onChange={(e) => setTicker(e.target.value)}
           placeholder="ticker (opt)"
-          className="border-4 border-white bg-black px-3 py-2 text-acid outline-none"
+          className="ugly-input px-3 py-2"
         />
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="name (opt)"
-          className="border-4 border-white bg-black px-3 py-2 text-acid outline-none"
+          className="ugly-input px-3 py-2"
         />
       </div>
       <input
         value={tagline}
         onChange={(e) => setTagline(e.target.value)}
         placeholder="one-liner (opt)"
-        className="mt-2 w-full border-4 border-white bg-black px-3 py-2 text-acid outline-none"
+        className="ugly-input mt-2 w-full px-3 py-2"
       />
 
       <label className="mt-3 block text-xs uppercase text-yell">bid (SOL)</label>
@@ -206,7 +206,7 @@ export function BidForm({ listings, onDone }: Props) {
         <button
           type="button"
           onClick={() => setAmount(String(roundSol(Math.max(MIN_SOL, bidSol - STEP_SOL))))}
-          className="h-11 w-11 border-4 border-white bg-black text-2xl"
+          className="ugly-input h-10 w-10 text-2xl"
         >
           −
         </button>
@@ -216,23 +216,23 @@ export function BidForm({ listings, onDone }: Props) {
           step={STEP_SOL}
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
-          className="w-32 border-4 border-white bg-black px-3 py-2 text-lg text-acid outline-none"
+          className="ugly-input w-28 px-3 py-2 text-lg sm:w-32"
         />
         <button
           type="button"
           onClick={() => setAmount(String(roundSol(bidSol + STEP_SOL)))}
-          className="h-11 w-11 border-4 border-white bg-black text-2xl"
+          className="ugly-input h-10 w-10 text-2xl"
         >
           +
         </button>
       </div>
-      <p className="mt-1 text-sm font-bold text-acid">0.05 SOL minimum</p>
-      <p className="mt-2 text-sm text-white/80">
+      <p className="mt-1 text-xs font-bold text-acid">0.05 SOL minimum</p>
+      <p className="mt-1 text-xs text-white/65">
         Already on the list? Same CA or pump.fun URL — you only pay the
         difference.
       </p>
 
-      <div className="mt-3 border-2 border-dashed border-hot p-2 text-sm">
+      <div className="mt-3 border border-dashed border-hot/70 p-2 text-sm">
         {parsed.ok ? (
           <>
             <div>
@@ -265,7 +265,7 @@ export function BidForm({ listings, onDone }: Props) {
           type="button"
           disabled={busy}
           onClick={onApe}
-          className="border-4 border-black bg-acid px-4 py-2 font-smash text-xl text-black hover:bg-yell disabled:opacity-50"
+          className="ugly-cta w-full px-5 py-3 font-smash text-2xl sm:w-auto"
         >
           {busy ? "APING…" : "Ape the board"}
         </button>
@@ -274,14 +274,14 @@ export function BidForm({ listings, onDone }: Props) {
             type="button"
             disabled={busy}
             onClick={onFake}
-            className="border-4 border-white bg-hot px-4 py-2 font-bold text-black hover:bg-white disabled:opacity-50"
+            className="border-2 border-white bg-hot px-4 py-2 font-bold text-black hover:bg-white disabled:opacity-50"
           >
             Place bid (dev)
           </button>
         )}
       </div>
       {status && (
-        <p className="mt-3 border-2 border-yell bg-black px-2 py-1 text-sm text-yell">
+        <p className="mt-3 border border-yell bg-black px-2 py-1 text-sm text-yell">
           {status}
         </p>
       )}

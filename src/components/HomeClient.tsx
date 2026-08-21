@@ -31,15 +31,15 @@ export function HomeClient() {
   }, [refresh]);
 
   return (
-    <div className="mx-auto max-w-5xl px-3 py-6 sm:px-4">
-      <div className="mb-4 flex items-center justify-end">
+    <div className="mx-auto max-w-5xl px-3 py-5 sm:px-4 sm:py-7">
+      <div className="mb-3 flex items-center justify-end">
         <WalletButton />
       </div>
-      <p className="mb-4 text-center text-sm text-white/60">
+      <p className="mb-3 text-center text-xs text-white/50">
         {listings.length} on the board
       </p>
-      <div id="bid-form" className="grid gap-6 lg:grid-cols-[1fr_280px]">
-        <div className="space-y-6">
+      <div id="bid-form" className="grid gap-8 lg:grid-cols-[1fr_260px] lg:gap-10">
+        <div className="space-y-8 sm:space-y-10">
           <BidForm listings={listings} onDone={refresh} />
           <Board listings={listings} />
         </div>
