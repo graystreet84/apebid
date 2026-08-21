@@ -3,7 +3,7 @@ import { randomUUID } from "crypto";
 import { SignatureUsedError, StoreUnavailableError, canAcceptPaidBid, isDurableStoreReady, updateStore } from "@/lib/store";
 import { parseIdentity, parseBidSol, sanitizeText } from "@/lib/validate";
 import { rankListings } from "@/lib/ranking";
-import { fakeTxEnabled, verifyTransfer } from "@/lib/solana";
+import { fakeTxEnabled, usedSignatureExists, verifyTransfer } from "@/lib/solana";
 import { MIN_UNITS } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -92,7 +92,7 @@ export async function POST(req: Request) {
         store.usedSignatures.push(`dev-${Date.now()}`);
       } else {
         const sig = String(signature);
-        if (store.usedSignatures.includes(sig)) {
+        if (usedSignatureExists(store.usedSignatures, sig)) {
           throw new HttpError(409, "That signature was already used.");
         }
         const check = await verifyTransfer(sig, payUnits, parsedId.value.mint);
@@ -100,7 +100,7 @@ export async function POST(req: Request) {
           throw new HttpError(400, check.error);
         }
         const canonical = check.canonicalSignature || sig;
-        if (canonical !== sig && store.usedSignatures.includes(canonical)) {
+        if (canonical !== sig && usedSignatureExists(store.usedSignatures, canonical)) {
           throw new HttpError(409, "That signature was already used.");
         }
         store.usedSignatures.push(sig);
