@@ -221,7 +221,18 @@ export type TreasuryHistoryHint = {
   memo?: string | null;
   blockTime?: number | null;
   err?: unknown;
+  lamports?: number | null;
+  treasuryLamports?: number | null;
 };
+
+export function historyTreasuryLamports(
+  history: TreasuryHistoryHint | null | undefined
+): number | null {
+  if (!history) return null;
+  const raw = history.treasuryLamports ?? history.lamports;
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) return null;
+  return raw;
+}
 
 export function decideTransferVerification(opts: {
   status: SignatureStatusLike;
@@ -297,6 +308,17 @@ export function decideTransferVerification(opts: {
     if (nowSec - bt > BID_MAX_AGE_SECONDS) {
       return { ok: false, error: "Transaction is too old." };
     }
+    const seen = historyTreasuryLamports(opts.history);
+    if (seen == null) {
+      return { ok: false, error: "Transaction not found / not confirmed yet." };
+    }
+    const needed = unitsToLamports(opts.payUnits);
+    if (seen < needed) {
+      return {
+        ok: false,
+        error: `Amount mismatch: treasury gained ${seen} lamports, expected ${needed}.`,
+      };
+    }
     return { ok: true };
   }
 
@@ -316,6 +338,7 @@ export type TreasurySigInfo = {
   blockTime?: number | null;
   memo?: string | null;
   slot?: number;
+  lamports?: number | null;
 };
 
 export function signaturesMatch(a: string, b: string): boolean {
@@ -344,6 +367,8 @@ export function findTreasurySignature(
     blockTime?: number | null;
     memo?: string | null;
     slot?: number;
+    lamports?: number | null;
+    treasuryLamports?: number | null;
   }>,
   submitted: string
 ): TreasurySigInfo | null {
@@ -356,6 +381,7 @@ export function findTreasurySignature(
       blockTime: row.blockTime,
       memo: parseHistoryMemo(row.memo),
       slot: row.slot,
+      lamports: historyTreasuryLamports(row),
     };
   }
   return null;

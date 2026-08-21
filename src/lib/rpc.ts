@@ -82,6 +82,7 @@ export function rpcUpstreamHost(url = serverRpcUrl()): string {
 export const ALLOWED_SITE_ORIGINS = [
   "https://apebid.lol",
   "https://www.apebid.lol",
+  "https://apebid-prod.vercel.app",
 ] as const;
 
 function isHostedVercel(env: NodeJS.ProcessEnv = process.env): boolean {
@@ -104,7 +105,6 @@ export function isAllowedSiteOrigin(
       return true;
     }
     const host = url.hostname.toLowerCase();
-    if (host.endsWith(".vercel.app")) return true;
     if (host === "localhost" || host === "127.0.0.1") {
       return !isHostedVercel(env);
     }
@@ -169,6 +169,18 @@ type Bucket = { count: number; resetAt: number };
 const buckets = new Map<string, Bucket>();
 const WINDOW_MS = 10_000;
 const MAX_PER_WINDOW = 40;
+
+export const BID_BURST_WINDOW_MS = 10_000;
+export const BID_BURST_MAX = 10;
+
+export function bidBurstLimited(
+  key: string,
+  now = Date.now(),
+  windowMs = BID_BURST_WINDOW_MS,
+  max = BID_BURST_MAX
+): boolean {
+  return rpcBurstLimited(`bid:${key}`, now, windowMs, max);
+}
 
 export function rpcBurstLimited(
   key: string,

@@ -25,10 +25,7 @@ function fail(status: number, error: string, id: unknown = null) {
       error: { code: status, message: error },
       id,
     },
-    {
-      status,
-      headers: { "x-apebid-rpc-host": rpcUpstreamHost() },
-    }
+    { status }
   );
 }
 
@@ -90,7 +87,6 @@ export async function POST(req: Request) {
         headers: {
           "Content-Type":
             upstreamRes.headers.get("content-type") || "application/json",
-          "x-apebid-rpc-host": host,
           "Cache-Control": "no-store",
         },
       });
