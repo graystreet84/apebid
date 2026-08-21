@@ -1,7 +1,24 @@
+import { ComputeBudgetProgram, type TransactionInstruction } from "@solana/web3.js";
 import { formatSol } from "./types";
 
-/** Conservative 1-sig transfer+memo fee when getFeeForMessage is unavailable. */
-export const DEFAULT_TX_FEE_LAMPORTS = 10_000;
+/** Modest priority fee — enough to land, not a fee auction. */
+export const BID_CU_LIMIT = 40_000;
+export const BID_CU_PRICE_MICRO_LAMPORTS = 25_000;
+export const BID_PRIORITY_FEE_LAMPORTS = Math.ceil(
+  (BID_CU_PRICE_MICRO_LAMPORTS * BID_CU_LIMIT) / 1_000_000
+);
+
+/** Conservative 1-sig transfer+memo+priority fee when getFeeForMessage is unavailable. */
+export const DEFAULT_TX_FEE_LAMPORTS = 5_000 + BID_PRIORITY_FEE_LAMPORTS + 5_000;
+
+export function bidComputeBudgetIxs(): TransactionInstruction[] {
+  return [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: BID_CU_LIMIT }),
+    ComputeBudgetProgram.setComputeUnitPrice({
+      microLamports: BID_CU_PRICE_MICRO_LAMPORTS,
+    }),
+  ];
+}
 
 export function walletNeedsSolMessage(payUnits: number): string {
   return `this wallet needs ${formatSol(payUnits)} SOL + fee`;

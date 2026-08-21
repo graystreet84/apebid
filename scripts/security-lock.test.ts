@@ -7,7 +7,12 @@ process.env.NEXT_PUBLIC_TREASURY_ADDRESS ||=
   "Csx6qmKTzcrSQAVjRRygMQ8RqRJcAPiDNJD5ZnbZyQmt";
 
 import { unitsToLamports } from "../src/lib/types";
-import { fakeTxEnabled, inspectTransfer, type ParsedTxLike } from "../src/lib/solana";
+import {
+  decideTransferVerification,
+  fakeTxEnabled,
+  inspectTransfer,
+  type ParsedTxLike,
+} from "../src/lib/solana";
 import { bidMemoData, BID_MAX_AGE_SECONDS, MEMO_PROGRAM_ID } from "../src/lib/memo";
 import { isAllowedClickUrl } from "../src/lib/validate";
 import { canAcceptPaidBid, durableStoreConfigured, hostedStoreConfigured } from "../src/lib/store";
@@ -26,12 +31,21 @@ import {
 } from "../src/lib/rpc";
 import { RPC_PROXY_PATH, clientRpcEndpoint } from "../src/lib/constants";
 import {
+  BID_CU_PRICE_MICRO_LAMPORTS,
+  BID_PRIORITY_FEE_LAMPORTS,
   DEFAULT_TX_FEE_LAMPORTS,
+  bidComputeBudgetIxs,
   formatSimulateError,
   simulateTransactionRpcParams,
   walletCoversBid,
   walletNeedsSolMessage,
 } from "../src/lib/bidPreflight";
+import {
+  isBlockHeightExceededError,
+  shouldPostBid,
+  signatureLandedOk,
+  waitForSignatureLanded,
+} from "../src/lib/bidConfirm";
 
 const TREASURY = "Csx6qmKTzcrSQAVjRRygMQ8RqRJcAPiDNJD5ZnbZyQmt";
 const MINT = "So11111111111111111111111111111111111111112";
@@ -39,17 +53,10 @@ const OTHER = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 let failed = 0;
 let passed = 0;
+const pending: { name: string; fn: () => void | Promise<void> }[] = [];
 
-function test(name: string, fn: () => void) {
-  try {
-    fn();
-    passed += 1;
-    console.log(`ok  ${name}`);
-  } catch (err) {
-    failed += 1;
-    console.error(`FAIL  ${name}`);
-    console.error(err);
-  }
+function test(name: string, fn: () => void | Promise<void>) {
+  pending.push({ name, fn });
 }
 
 function mockTx(opts: {
@@ -164,6 +171,83 @@ test("matching recent transfer is accepted", () => {
   const tx = mockTx({ lamports: 50_000_000, blockTime: now - 60 });
   const check = inspectTransfer(tx, 5, MINT, { nowSec: now, treasury: TREASURY });
   assert.equal(check.ok, true);
+});
+
+test("finalized status is accepted when parsed tx is missing", () => {
+  const check = decideTransferVerification({
+    status: { err: null, confirmationStatus: "finalized" },
+    tx: null,
+    payUnits: 5,
+    mint: MINT,
+    treasury: TREASURY,
+  });
+  assert.equal(check.ok, true);
+});
+
+test("confirmed status is accepted when parsed tx is missing", () => {
+  const check = decideTransferVerification({
+    status: { err: null, confirmationStatus: "confirmed" },
+    tx: null,
+    payUnits: 5,
+    mint: MINT,
+    treasury: TREASURY,
+  });
+  assert.equal(check.ok, true);
+});
+
+test("missing parsed tx is rejected without a landed status", () => {
+  const check = decideTransferVerification({
+    status: null,
+    tx: null,
+    payUnits: 5,
+    mint: MINT,
+    treasury: TREASURY,
+  });
+  assert.equal(check.ok, false);
+  if (!check.ok) assert.match(check.error, /not found/);
+});
+
+test("finalized status with on-chain err is rejected", () => {
+  const check = decideTransferVerification({
+    status: { err: { InstructionError: [0, "Custom"] }, confirmationStatus: "finalized" },
+    tx: null,
+    payUnits: 5,
+    mint: MINT,
+    treasury: TREASURY,
+  });
+  assert.equal(check.ok, false);
+  if (!check.ok) assert.match(check.error, /failed on-chain/);
+});
+
+test("parsed tx still enforces memo when statuses are finalized", () => {
+  const tx = mockTx({ lamports: 50_000_000, memo: bidMemoData(OTHER) });
+  const check = decideTransferVerification({
+    status: { err: null, confirmationStatus: "finalized" },
+    tx,
+    payUnits: 5,
+    mint: MINT,
+    treasury: TREASURY,
+  });
+  assert.equal(check.ok, false);
+  if (!check.ok) assert.match(check.error, /does not match/);
+});
+
+test("incomplete parsed tx with old blockTime is rejected even if finalized", () => {
+  const now = 1_800_000_000;
+  const check = decideTransferVerification({
+    status: { err: null, confirmationStatus: "finalized" },
+    tx: {
+      blockTime: now - BID_MAX_AGE_SECONDS - 10,
+      meta: { err: null, preBalances: [], postBalances: [] },
+      transaction: { message: { instructions: [] } },
+    },
+    payUnits: 5,
+    mint: MINT,
+    nowSec: now,
+    treasury: TREASURY,
+  });
+  assert.equal(check.ok, false);
+  if (!check.ok) assert.match(check.error, /too old/);
 });
 
 test("clickUrl host allowlist", () => {
@@ -360,12 +444,75 @@ test("browser bid/wallet sources never call official public RPC", () => {
     "src/components/WalletProviders.tsx",
     "src/components/Providers.tsx",
     "src/lib/bidPreflight.ts",
+    "src/lib/bidConfirm.ts",
     "src/lib/constants.ts",
   ];
   for (const file of files) {
     const src = readFileSync(join(root, file), "utf8");
     assert.equal(src.includes("https://api.mainnet-beta.solana.com"), false, file);
     assert.equal(src.includes("https://solana-rpc.publicnode.com"), false, file);
+  }
+});
+
+test("landed or expired blockhash still records the bid", () => {
+  assert.equal(signatureLandedOk({ err: null, confirmationStatus: "confirmed" }), true);
+  assert.equal(signatureLandedOk({ err: null, confirmationStatus: "finalized" }), true);
+  assert.equal(signatureLandedOk({ err: { InstructionError: [0, "Custom"] }, confirmationStatus: "confirmed" }), false);
+  assert.equal(signatureLandedOk(null), false);
+  assert.equal(shouldPostBid({ kind: "landed" }), true);
+  assert.equal(shouldPostBid({ kind: "expired" }), true);
+  assert.equal(shouldPostBid({ kind: "timeout" }), true);
+  assert.equal(shouldPostBid({ kind: "failed", error: "on-chain err" }), false);
+  const expired = new Error("Transaction block height exceeded");
+  expired.name = "TransactionExpiredBlockheightExceededError";
+  assert.equal(isBlockHeightExceededError(expired), true);
+  assert.equal(isBlockHeightExceededError(new Error("block height exceeded")), true);
+  assert.equal(isBlockHeightExceededError(new Error("insufficient funds")), false);
+});
+
+test("poll getSignatureStatuses ignores stale blockhash and waits for confirmed", async () => {
+  let n = 0;
+  let t = 0;
+  const outcome = await waitForSignatureLanded(
+    async () => {
+      n += 1;
+      if (n === 1) return null;
+      return { err: null, confirmationStatus: "finalized" };
+    },
+    "test-sig",
+    {
+      timeoutMs: 5_000,
+      intervalMs: 1,
+      now: () => t,
+      sleep: async () => {
+        t += 1;
+      },
+    }
+  );
+  assert.equal(outcome.kind, "landed");
+});
+
+test("poll treats confirm block-height errors as expired, not a failed bid", async () => {
+  const outcome = await waitForSignatureLanded(
+    async () => {
+      const err = new Error("block height exceeded");
+      err.name = "TransactionExpiredBlockheightExceededError";
+      throw err;
+    },
+    "sig",
+    { timeoutMs: 5, intervalMs: 1, now: () => 0, sleep: async () => {} }
+  );
+  assert.equal(outcome.kind, "expired");
+  assert.equal(shouldPostBid(outcome), true);
+});
+
+test("bid priority fee is modest and adds no extra signer", () => {
+  assert.ok(BID_PRIORITY_FEE_LAMPORTS <= 5_000);
+  assert.ok(BID_CU_PRICE_MICRO_LAMPORTS <= 50_000);
+  const ixs = bidComputeBudgetIxs();
+  assert.equal(ixs.length, 2);
+  for (const ix of ixs) {
+    assert.equal(ix.keys.filter((k) => k.isSigner).length, 0);
   }
 });
 
@@ -377,5 +524,16 @@ function restoreEnv(prev: Record<string, string | undefined>) {
   }
 }
 
+for (const { name, fn } of pending) {
+  try {
+    await fn();
+    passed += 1;
+    console.log(`ok  ${name}`);
+  } catch (err) {
+    failed += 1;
+    console.error(`FAIL  ${name}`);
+    console.error(err);
+  }
+}
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

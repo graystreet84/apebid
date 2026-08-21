@@ -6,11 +6,17 @@ import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { MIN_SOL, STEP_SOL, TREASURY_ADDRESS, toLamports, roundSol } from "@/lib/constants";
 import {
   DEFAULT_TX_FEE_LAMPORTS,
+  bidComputeBudgetIxs,
   formatSimulateError,
   simulateUnsignedTransaction,
   walletCoversBid,
   walletNeedsSolMessage,
 } from "@/lib/bidPreflight";
+import {
+  fetchSignatureStatus,
+  shouldPostBid,
+  waitForSignatureLanded,
+} from "@/lib/bidConfirm";
 import { bidMemoData, MEMO_PROGRAM_ID } from "@/lib/memo";
 import { formatSol, solToUnits, unitsToSol, type RankedListing } from "@/lib/types";
 import { parseIdentity } from "@/lib/validate";
@@ -123,6 +129,7 @@ export function BidForm({ listings, onDone }: Props) {
 
       const mint = parsed.value.mint;
       const tx = new Transaction().add(
+        ...bidComputeBudgetIxs(),
         SystemProgram.transfer({
           fromPubkey: publicKey,
           toPubkey: new PublicKey(TREASURY_ADDRESS),
@@ -173,7 +180,15 @@ export function BidForm({ listings, onDone }: Props) {
       setStatus("waiting for wallet sig…");
       const sig = await sendTransaction(tx, connection);
       setStatus(`confirming ${sig.slice(0, 8)}…`);
-      await connection.confirmTransaction({ signature: sig, ...latest }, "confirmed");
+      const outcome = await waitForSignatureLanded(
+        (signature) => fetchSignatureStatus(connection, signature),
+        sig
+      );
+      if (!shouldPostBid(outcome)) {
+        setStatus(outcome.kind === "failed" ? outcome.error : "tx failed");
+        return;
+      }
+      setStatus(`recording ${sig.slice(0, 8)}…`);
       const data = await postBid(sig);
       setStatus(
         `listed at #${data.rank} · paid ${formatSol(data.paidUnits || payUnits)} SOL`
