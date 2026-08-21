@@ -5,10 +5,12 @@
   "scripts": {
     "dev": "next dev -p 3001",
     "build": "next build",
-    "start": "next start -p 3001"
+    "start": "next start -p 3001",
+    "test": "tsx scripts/security-lock.test.ts"
   },
   "dependencies": {
     "@libsql/client": "^0.17.4",
+    "@neondatabase/serverless": "^1.1.0",
     "@solana/wallet-adapter-base": "^0.9.26",
     "@solana/wallet-adapter-phantom": "^0.9.27",
     "@solana/wallet-adapter-react": "^0.15.38",
@@ -27,6 +29,7 @@
     "autoprefixer": "^10.4.21",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
+    "tsx": "^4.23.12",
     "typescript": "^5.9.2"
   }
 }

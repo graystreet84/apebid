@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  serverExternalPackages: ["@libsql/client"],
+  serverExternalPackages: ["@libsql/client", "@neondatabase/serverless"],
   transpilePackages: [
     "@solana/wallet-adapter-base",
     "@solana/wallet-adapter-react",

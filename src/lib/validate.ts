@@ -185,6 +185,20 @@ export function sanitizeText(raw: unknown, max: number): string {
   return t.slice(0, max);
 }
 
+const CLICK_HOSTS = new Set(["pump.fun", "solscan.io"]);
+
+export function isAllowedClickUrl(raw: string): boolean {
+  if (!raw) return false;
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    const host = u.hostname.toLowerCase().replace(/^www\./, "");
+    return CLICK_HOSTS.has(host);
+  } catch {
+    return false;
+  }
+}
+
 export function hostLooksBanned(raw: string): boolean {
   const host = hostOf(raw);
   if (!host) return false;

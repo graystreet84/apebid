@@ -2,56 +2,51 @@ import fs from "fs";
 import path from "path";
 import { createClient, type Client, type InStatement, type Row } from "@libsql/client";
 import type { Activity, Listing, StoreData, VisitorStats } from "./types";
+import {
+  isNeonUniqueError,
+  neonEnsureReady,
+  neonGetMeta,
+  neonLoad,
+  neonPersist,
+  neonRevenueStats,
+  neonSetMeta,
+  neonUrl,
+  neonUpsertVisitor,
+  neonVisitorStats,
+} from "./storeNeon";
 
 const LOCAL_REL = path.join("data", "apebid.db");
 
 let client: Client | null = null;
 let ready: Promise<void> | null = null;
 let chain: Promise<unknown> = Promise.resolve();
-let backend: "unset" | "libsql" | "memory" = "unset";
+let backend: "unset" | "neon" | "libsql" | "empty" = "unset";
 let fileStoreOk: boolean | null = null;
 
-type MemoryDb = {
-  listings: Listing[];
-  activity: Activity[];
-  usedSignatures: string[];
-  visitors: Map<string, { firstSeen: string; lastSeen: string }>;
-  meta: Map<string, string>;
-};
-
-let memory: MemoryDb | null = null;
-
-function createMemory(now = new Date().toISOString()): MemoryDb {
-  return {
-    listings: [],
-    activity: [],
-    usedSignatures: [],
-    visitors: new Map(),
-    meta: new Map([["launchedAt", now]]),
-  };
+function isServerless(): boolean {
+  if (process.env.VERCEL) return true;
+  const env = process.env.VERCEL_ENV;
+  return env === "production" || env === "preview";
 }
 
-function useMemory(reason: unknown): MemoryDb {
-  if (!memory) memory = createMemory();
-  if (backend !== "memory") {
-    backend = "memory";
-    client = null;
-    const detail = reason instanceof Error ? reason.message : String(reason);
-    console.warn(
-      "apebid store: durable file/Turso unavailable, using in-memory store:",
-      detail
-    );
-  }
-  return memory;
+function hasHostedLibsql(): boolean {
+  const url = process.env.TURSO_DATABASE_URL?.trim();
+  const token = process.env.TURSO_AUTH_TOKEN?.trim();
+  return Boolean(url && token && !url.startsWith("file:"));
 }
 
-function hasTurso(): boolean {
-  return Boolean(process.env.TURSO_DATABASE_URL?.trim());
+function hostedLibsqlUrl(): string | null {
+  if (!hasHostedLibsql()) return null;
+  return process.env.TURSO_DATABASE_URL!.trim();
+}
+
+function isDurableBackend(): boolean {
+  return backend === "neon" || backend === "libsql";
 }
 
 function canUseFileStore(): boolean {
-  // Vercel’s function FS is read-only; file: libsql cannot persist there.
-  if (process.env.VERCEL) return false;
+  // Serverless / Vercel function FS cannot persist a local sqlite file.
+  if (isServerless()) return false;
   if (fileStoreOk != null) return fileStoreOk;
   try {
     const abs = path.isAbsolute(LOCAL_REL)
@@ -72,6 +67,29 @@ export class SignatureUsedError extends Error {
     super("That signature was already used.");
     this.name = "SignatureUsedError";
   }
+}
+
+export class StoreUnavailableError extends Error {
+  constructor(message = "Board store is unavailable.") {
+    super(message);
+    this.name = "StoreUnavailableError";
+  }
+}
+
+function markEmpty(reason: unknown): void {
+  backend = "empty";
+  client = null;
+  const detail = reason instanceof Error ? reason.message : String(reason);
+  console.warn("apebid store: durable store unavailable:", detail);
+}
+
+function emptyStoreData(): StoreData {
+  return {
+    listings: [],
+    activity: [],
+    usedSignatures: [],
+    usedSigs: [],
+  };
 }
 
 function withLock<T>(fn: () => Promise<T> | T): Promise<T> {
@@ -115,10 +133,19 @@ function localFileUrl(): string {
 }
 
 function dbUrl(): string | null {
-  const env = process.env.TURSO_DATABASE_URL;
-  if (env && env.trim()) return env.trim();
+  const hosted = hostedLibsqlUrl();
+  if (hosted) return hosted;
   if (canUseFileStore()) return localFileUrl();
   return null;
+}
+
+export function hostedStoreConfigured(): boolean {
+  return Boolean(neonUrl() || hostedLibsqlUrl());
+}
+
+export function durableStoreConfigured(): boolean {
+  if (hostedStoreConfigured()) return true;
+  return canUseFileStore();
 }
 
 function getClient(): Client {
@@ -306,11 +333,29 @@ async function ensureLaunchedAt(c: Client): Promise<void> {
 }
 
 async function init(): Promise<void> {
-  if (backend === "memory") return;
+  if (backend === "neon" || backend === "libsql") return;
+  if (backend === "empty") {
+    if (neonUrl() || hostedLibsqlUrl() || canUseFileStore()) {
+      ready = null;
+      backend = "unset";
+    } else {
+      return;
+    }
+  }
   if (!ready) {
     ready = (async () => {
-      if (!hasTurso() && !canUseFileStore()) {
-        useMemory("no Turso URL/token and filesystem is not writable");
+      if (neonUrl()) {
+        try {
+          await neonEnsureReady();
+          backend = "neon";
+          return;
+        } catch (err) {
+          markEmpty(err);
+          return;
+        }
+      }
+      if (!dbUrl()) {
+        markEmpty("no hosted database and filesystem is not writable");
         return;
       }
       try {
@@ -321,65 +366,16 @@ async function init(): Promise<void> {
         backend = "libsql";
       } catch (err) {
         client = null;
-        useMemory(err);
+        markEmpty(err);
       }
     })();
   }
   return ready;
 }
 
-function cloneStore(data: StoreData): StoreData {
-  const used = (data.usedSignatures ?? data.usedSigs ?? []).slice();
-  return {
-    listings: data.listings.map((l) => ({ ...l })),
-    activity: data.activity.map((a) => ({ ...a })),
-    usedSignatures: used,
-    usedSigs: used.slice(),
-  };
-}
-
-function loadMemory(): StoreData {
-  const m = memory ?? useMemory("load");
-  return cloneStore({
-    listings: m.listings,
-    activity: m.activity,
-    usedSignatures: m.usedSignatures,
-    usedSigs: m.usedSignatures,
-  });
-}
-
-function persistMemory(next: StoreData): void {
-  const m = memory ?? useMemory("persist");
-  const used = next.usedSignatures ?? next.usedSigs ?? [];
-  m.listings = next.listings.map((l) => ({ ...l }));
-  m.activity = next.activity.map((a) => ({ ...a }));
-  m.usedSignatures = used.slice();
-}
-
-function memoryVisitorStats(): VisitorStats {
-  const m = memory ?? useMemory("visitorStats");
-  const now = Date.now();
-  const liveCutoff = now - 120_000;
-  const h12Cutoff = now - 12 * 3600 * 1000;
-  let live = 0;
-  let last12h = 0;
-  for (const v of m.visitors.values()) {
-    const t = Date.parse(v.lastSeen);
-    if (Number.isFinite(t) && t >= liveCutoff) live += 1;
-    if (Number.isFinite(t) && t >= h12Cutoff) last12h += 1;
-  }
-  return {
-    live,
-    last12h,
-    sinceLaunch: m.visitors.size,
-    launchedAt: m.meta.get("launchedAt") || new Date().toISOString(),
-  };
-}
-
-function memoryRevenue(): { revenueUnits: number; revenueSol: number } {
-  const m = memory ?? useMemory("revenue");
-  const revenueUnits = m.listings.reduce((s, l) => s + (l.paidUnits || 0), 0);
-  return { revenueUnits, revenueSol: revenueUnits / 100 };
+export async function isDurableStoreReady(): Promise<boolean> {
+  await init();
+  return isDurableBackend();
 }
 
 function listingFromRow(row: Row): Listing {
@@ -514,13 +510,22 @@ function activityUpsert(a: Activity): InStatement {
 }
 
 function isUniqueError(err: unknown): boolean {
+  if (isNeonUniqueError(err)) return true;
   const msg = err instanceof Error ? err.message : String(err);
   return /UNIQUE constraint failed|already exists|constraint/i.test(msg);
 }
 
 async function loadData(): Promise<StoreData> {
   await init();
-  if (backend === "memory") return loadMemory();
+  if (backend === "neon") {
+    try {
+      return await neonLoad();
+    } catch (err) {
+      markEmpty(err);
+      return emptyStoreData();
+    }
+  }
+  if (backend !== "libsql") return emptyStoreData();
   try {
     const c = getClient();
     const [listingsRes, activityRes, sigsRes] = await Promise.all([
@@ -536,8 +541,8 @@ async function loadData(): Promise<StoreData> {
       usedSigs: used,
     };
   } catch (err) {
-    useMemory(err);
-    return loadMemory();
+    markEmpty(err);
+    return emptyStoreData();
   }
 }
 
@@ -545,12 +550,15 @@ async function persist(prev: StoreData, next: StoreData): Promise<void> {
   const used = next.usedSignatures ?? next.usedSigs ?? [];
   next.usedSignatures = used;
   next.usedSigs = used;
-  if (backend === "memory") {
-    persistMemory(next);
-    return;
+  if (!isDurableBackend()) {
+    throw new StoreUnavailableError();
   }
 
   try {
+    if (backend === "neon") {
+      await neonPersist(prev, next);
+      return;
+    }
     const c = getClient();
     const stmts: InStatement[] = [];
     const nextListingIds = new Set(next.listings.map((l) => l.id));
@@ -583,8 +591,8 @@ async function persist(prev: StoreData, next: StoreData): Promise<void> {
     await c.batch(stmts, "write");
   } catch (err) {
     if (isUniqueError(err)) throw new SignatureUsedError();
-    useMemory(err);
-    persistMemory(next);
+    markEmpty(err);
+    throw new StoreUnavailableError();
   }
 }
 
@@ -618,22 +626,17 @@ export function withStore<T>(
   return withLock(async () => fn(await loadData()));
 }
 
-function touchMemoryVisitor(id: string, now: string): void {
-  const m = memory ?? useMemory("visitor");
-  const prev = m.visitors.get(id);
-  m.visitors.set(id, { firstSeen: prev?.firstSeen ?? now, lastSeen: now });
-}
-
 export async function upsertVisitor(id: string): Promise<void> {
   if (!id) return;
   return withLock(async () => {
     await init();
+    if (!isDurableBackend()) return;
     const now = new Date().toISOString();
-    if (backend === "memory") {
-      touchMemoryVisitor(id, now);
-      return;
-    }
     try {
+      if (backend === "neon") {
+        await neonUpsertVisitor(id, now);
+        return;
+      }
       const c = getClient();
       await c.execute({
         sql: `INSERT INTO visitors (id, firstSeen, lastSeen) VALUES (?, ?, ?)
@@ -641,16 +644,23 @@ export async function upsertVisitor(id: string): Promise<void> {
         args: [id, now, now],
       });
     } catch (err) {
-      useMemory(err);
-      touchMemoryVisitor(id, now);
+      markEmpty(err);
     }
   });
 }
 
 export async function visitorStats(): Promise<VisitorStats> {
   await init();
-  if (backend === "memory") return memoryVisitorStats();
+  if (!isDurableBackend()) {
+    return {
+      live: 0,
+      last12h: 0,
+      sinceLaunch: 0,
+      launchedAt: new Date().toISOString(),
+    };
+  }
   try {
+    if (backend === "neon") return await neonVisitorStats();
     const c = getClient();
     const now = Date.now();
     const liveCutoff = new Date(now - 120_000).toISOString();
@@ -674,8 +684,13 @@ export async function visitorStats(): Promise<VisitorStats> {
       launchedAt: str(launched.rows[0]?.value, new Date().toISOString()),
     };
   } catch (err) {
-    useMemory(err);
-    return memoryVisitorStats();
+    markEmpty(err);
+    return {
+      live: 0,
+      last12h: 0,
+      sinceLaunch: 0,
+      launchedAt: new Date().toISOString(),
+    };
   }
 }
 
@@ -684,8 +699,9 @@ export async function revenueStats(): Promise<{
   revenueSol: number;
 }> {
   await init();
-  if (backend === "memory") return memoryRevenue();
+  if (!isDurableBackend()) return { revenueUnits: 0, revenueSol: 0 };
   try {
+    if (backend === "neon") return await neonRevenueStats();
     const c = getClient();
     const r = await c.execute(
       "SELECT COALESCE(SUM(paidUnits), 0) AS n FROM listings"
@@ -693,8 +709,8 @@ export async function revenueStats(): Promise<{
     const revenueUnits = num(r.rows[0]?.n);
     return { revenueUnits, revenueSol: revenueUnits / 100 };
   } catch (err) {
-    useMemory(err);
-    return memoryRevenue();
+    markEmpty(err);
+    return { revenueUnits: 0, revenueSol: 0 };
   }
 }
 
@@ -737,10 +753,9 @@ export function emptyStatePayload() {
 
 export async function getMeta(key: string): Promise<string | null> {
   await init();
-  if (backend === "memory") {
-    return (memory ?? useMemory("getMeta")).meta.get(key) ?? null;
-  }
+  if (!isDurableBackend()) return null;
   try {
+    if (backend === "neon") return await neonGetMeta(key);
     const c = getClient();
     const r = await c.execute({
       sql: "SELECT value FROM meta WHERE key = ?",
@@ -749,25 +764,25 @@ export async function getMeta(key: string): Promise<string | null> {
     if (!r.rows.length || r.rows[0].value == null) return null;
     return str(r.rows[0].value);
   } catch (err) {
-    useMemory(err);
-    return (memory ?? useMemory("getMeta")).meta.get(key) ?? null;
+    markEmpty(err);
+    return null;
   }
 }
 
 export async function setMeta(key: string, value: string): Promise<void> {
   await init();
-  if (backend === "memory") {
-    (memory ?? useMemory("setMeta")).meta.set(key, value);
-    return;
-  }
+  if (!isDurableBackend()) return;
   try {
+    if (backend === "neon") {
+      await neonSetMeta(key, value);
+      return;
+    }
     const c = getClient();
     await c.execute({
       sql: "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
       args: [key, value],
     });
   } catch (err) {
-    useMemory(err);
-    (memory ?? useMemory("setMeta")).meta.set(key, value);
+    markEmpty(err);
   }
 }
