@@ -8,6 +8,64 @@ const LOCAL_REL = path.join("data", "apebid.db");
 let client: Client | null = null;
 let ready: Promise<void> | null = null;
 let chain: Promise<unknown> = Promise.resolve();
+let backend: "unset" | "libsql" | "memory" = "unset";
+let fileStoreOk: boolean | null = null;
+
+type MemoryDb = {
+  listings: Listing[];
+  activity: Activity[];
+  usedSignatures: string[];
+  visitors: Map<string, { firstSeen: string; lastSeen: string }>;
+  meta: Map<string, string>;
+};
+
+let memory: MemoryDb | null = null;
+
+function createMemory(now = new Date().toISOString()): MemoryDb {
+  return {
+    listings: [],
+    activity: [],
+    usedSignatures: [],
+    visitors: new Map(),
+    meta: new Map([["launchedAt", now]]),
+  };
+}
+
+function useMemory(reason: unknown): MemoryDb {
+  if (!memory) memory = createMemory();
+  if (backend !== "memory") {
+    backend = "memory";
+    client = null;
+    const detail = reason instanceof Error ? reason.message : String(reason);
+    console.warn(
+      "apebid store: durable file/Turso unavailable, using in-memory store:",
+      detail
+    );
+  }
+  return memory;
+}
+
+function hasTurso(): boolean {
+  return Boolean(process.env.TURSO_DATABASE_URL?.trim());
+}
+
+function canUseFileStore(): boolean {
+  // Vercel’s function FS is read-only; file: libsql cannot persist there.
+  if (process.env.VERCEL) return false;
+  if (fileStoreOk != null) return fileStoreOk;
+  try {
+    const abs = path.isAbsolute(LOCAL_REL)
+      ? LOCAL_REL
+      : path.join(process.cwd(), LOCAL_REL);
+    const dir = path.dirname(abs);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.accessSync(dir, fs.constants.W_OK);
+    fileStoreOk = true;
+  } catch {
+    fileStoreOk = false;
+  }
+  return fileStoreOk;
+}
 
 export class SignatureUsedError extends Error {
   constructor() {
@@ -56,15 +114,19 @@ function localFileUrl(): string {
   return `file:${abs}`;
 }
 
-function dbUrl(): string {
+function dbUrl(): string | null {
   const env = process.env.TURSO_DATABASE_URL;
   if (env && env.trim()) return env.trim();
-  return localFileUrl();
+  if (canUseFileStore()) return localFileUrl();
+  return null;
 }
 
 function getClient(): Client {
   if (client) return client;
   const url = dbUrl();
+  if (!url) {
+    throw new Error("No durable store URL");
+  }
   if (url.startsWith("file:")) {
     const filePath = url.slice("file:".length);
     const dir = path.dirname(filePath);
@@ -244,18 +306,80 @@ async function ensureLaunchedAt(c: Client): Promise<void> {
 }
 
 async function init(): Promise<void> {
+  if (backend === "memory") return;
   if (!ready) {
     ready = (async () => {
-      const c = getClient();
-      await ensureSchema(c);
-      await importJsonIfNeeded(c);
-      await ensureLaunchedAt(c);
-    })().catch((err) => {
-      ready = null;
-      throw err;
-    });
+      if (!hasTurso() && !canUseFileStore()) {
+        useMemory("no Turso URL/token and filesystem is not writable");
+        return;
+      }
+      try {
+        const c = getClient();
+        await ensureSchema(c);
+        await importJsonIfNeeded(c);
+        await ensureLaunchedAt(c);
+        backend = "libsql";
+      } catch (err) {
+        client = null;
+        useMemory(err);
+      }
+    })();
   }
   return ready;
+}
+
+function cloneStore(data: StoreData): StoreData {
+  const used = (data.usedSignatures ?? data.usedSigs ?? []).slice();
+  return {
+    listings: data.listings.map((l) => ({ ...l })),
+    activity: data.activity.map((a) => ({ ...a })),
+    usedSignatures: used,
+    usedSigs: used.slice(),
+  };
+}
+
+function loadMemory(): StoreData {
+  const m = memory ?? useMemory("load");
+  return cloneStore({
+    listings: m.listings,
+    activity: m.activity,
+    usedSignatures: m.usedSignatures,
+    usedSigs: m.usedSignatures,
+  });
+}
+
+function persistMemory(next: StoreData): void {
+  const m = memory ?? useMemory("persist");
+  const used = next.usedSignatures ?? next.usedSigs ?? [];
+  m.listings = next.listings.map((l) => ({ ...l }));
+  m.activity = next.activity.map((a) => ({ ...a }));
+  m.usedSignatures = used.slice();
+}
+
+function memoryVisitorStats(): VisitorStats {
+  const m = memory ?? useMemory("visitorStats");
+  const now = Date.now();
+  const liveCutoff = now - 120_000;
+  const h12Cutoff = now - 12 * 3600 * 1000;
+  let live = 0;
+  let last12h = 0;
+  for (const v of m.visitors.values()) {
+    const t = Date.parse(v.lastSeen);
+    if (Number.isFinite(t) && t >= liveCutoff) live += 1;
+    if (Number.isFinite(t) && t >= h12Cutoff) last12h += 1;
+  }
+  return {
+    live,
+    last12h,
+    sinceLaunch: m.visitors.size,
+    launchedAt: m.meta.get("launchedAt") || new Date().toISOString(),
+  };
+}
+
+function memoryRevenue(): { revenueUnits: number; revenueSol: number } {
+  const m = memory ?? useMemory("revenue");
+  const revenueUnits = m.listings.reduce((s, l) => s + (l.paidUnits || 0), 0);
+  return { revenueUnits, revenueSol: revenueUnits / 100 };
 }
 
 function listingFromRow(row: Row): Listing {
@@ -396,60 +520,71 @@ function isUniqueError(err: unknown): boolean {
 
 async function loadData(): Promise<StoreData> {
   await init();
-  const c = getClient();
-  const [listingsRes, activityRes, sigsRes] = await Promise.all([
-    c.execute("SELECT * FROM listings"),
-    c.execute("SELECT * FROM activity ORDER BY createdAt DESC"),
-    c.execute("SELECT signature FROM used_signatures"),
-  ]);
-  const used = sigsRes.rows.map((r) => str(r.signature));
-  return {
-    listings: listingsRes.rows.map(listingFromRow),
-    activity: activityRes.rows.map(activityFromRow),
-    usedSignatures: used,
-    usedSigs: used,
-  };
+  if (backend === "memory") return loadMemory();
+  try {
+    const c = getClient();
+    const [listingsRes, activityRes, sigsRes] = await Promise.all([
+      c.execute("SELECT * FROM listings"),
+      c.execute("SELECT * FROM activity ORDER BY createdAt DESC"),
+      c.execute("SELECT signature FROM used_signatures"),
+    ]);
+    const used = sigsRes.rows.map((r) => str(r.signature));
+    return {
+      listings: listingsRes.rows.map(listingFromRow),
+      activity: activityRes.rows.map(activityFromRow),
+      usedSignatures: used,
+      usedSigs: used,
+    };
+  } catch (err) {
+    useMemory(err);
+    return loadMemory();
+  }
 }
 
 async function persist(prev: StoreData, next: StoreData): Promise<void> {
-  const c = getClient();
   const used = next.usedSignatures ?? next.usedSigs ?? [];
   next.usedSignatures = used;
   next.usedSigs = used;
-
-  const stmts: InStatement[] = [];
-  const nextListingIds = new Set(next.listings.map((l) => l.id));
-  for (const l of prev.listings) {
-    if (!nextListingIds.has(l.id)) {
-      stmts.push({ sql: "DELETE FROM listings WHERE id = ?", args: [l.id] });
-    }
-  }
-  for (const l of next.listings) stmts.push(listingUpsert(l));
-
-  const nextActIds = new Set(next.activity.map((a) => a.id));
-  for (const a of prev.activity) {
-    if (!nextActIds.has(a.id)) {
-      stmts.push({ sql: "DELETE FROM activity WHERE id = ?", args: [a.id] });
-    }
-  }
-  for (const a of next.activity) stmts.push(activityUpsert(a));
-
-  const prevSigs = new Set(prev.usedSignatures ?? prev.usedSigs ?? []);
-  for (const sig of used) {
-    if (!prevSigs.has(sig)) {
-      stmts.push({
-        sql: "INSERT INTO used_signatures (signature) VALUES (?)",
-        args: [sig],
-      });
-    }
+  if (backend === "memory") {
+    persistMemory(next);
+    return;
   }
 
-  if (!stmts.length) return;
   try {
+    const c = getClient();
+    const stmts: InStatement[] = [];
+    const nextListingIds = new Set(next.listings.map((l) => l.id));
+    for (const l of prev.listings) {
+      if (!nextListingIds.has(l.id)) {
+        stmts.push({ sql: "DELETE FROM listings WHERE id = ?", args: [l.id] });
+      }
+    }
+    for (const l of next.listings) stmts.push(listingUpsert(l));
+
+    const nextActIds = new Set(next.activity.map((a) => a.id));
+    for (const a of prev.activity) {
+      if (!nextActIds.has(a.id)) {
+        stmts.push({ sql: "DELETE FROM activity WHERE id = ?", args: [a.id] });
+      }
+    }
+    for (const a of next.activity) stmts.push(activityUpsert(a));
+
+    const prevSigs = new Set(prev.usedSignatures ?? prev.usedSigs ?? []);
+    for (const sig of used) {
+      if (!prevSigs.has(sig)) {
+        stmts.push({
+          sql: "INSERT INTO used_signatures (signature) VALUES (?)",
+          args: [sig],
+        });
+      }
+    }
+
+    if (!stmts.length) return;
     await c.batch(stmts, "write");
   } catch (err) {
     if (isUniqueError(err)) throw new SignatureUsedError();
-    throw err;
+    useMemory(err);
+    persistMemory(next);
   }
 }
 
@@ -483,44 +618,65 @@ export function withStore<T>(
   return withLock(async () => fn(await loadData()));
 }
 
+function touchMemoryVisitor(id: string, now: string): void {
+  const m = memory ?? useMemory("visitor");
+  const prev = m.visitors.get(id);
+  m.visitors.set(id, { firstSeen: prev?.firstSeen ?? now, lastSeen: now });
+}
+
 export async function upsertVisitor(id: string): Promise<void> {
   if (!id) return;
   return withLock(async () => {
     await init();
-    const c = getClient();
     const now = new Date().toISOString();
-    await c.execute({
-      sql: `INSERT INTO visitors (id, firstSeen, lastSeen) VALUES (?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET lastSeen = excluded.lastSeen`,
-      args: [id, now, now],
-    });
+    if (backend === "memory") {
+      touchMemoryVisitor(id, now);
+      return;
+    }
+    try {
+      const c = getClient();
+      await c.execute({
+        sql: `INSERT INTO visitors (id, firstSeen, lastSeen) VALUES (?, ?, ?)
+              ON CONFLICT(id) DO UPDATE SET lastSeen = excluded.lastSeen`,
+        args: [id, now, now],
+      });
+    } catch (err) {
+      useMemory(err);
+      touchMemoryVisitor(id, now);
+    }
   });
 }
 
 export async function visitorStats(): Promise<VisitorStats> {
   await init();
-  const c = getClient();
-  const now = Date.now();
-  const liveCutoff = new Date(now - 120_000).toISOString();
-  const h12Cutoff = new Date(now - 12 * 3600 * 1000).toISOString();
-  const [live, last12h, total, launched] = await Promise.all([
-    c.execute({
-      sql: "SELECT COUNT(*) AS n FROM visitors WHERE lastSeen >= ?",
-      args: [liveCutoff],
-    }),
-    c.execute({
-      sql: "SELECT COUNT(*) AS n FROM visitors WHERE lastSeen >= ?",
-      args: [h12Cutoff],
-    }),
-    c.execute("SELECT COUNT(*) AS n FROM visitors"),
-    c.execute("SELECT value FROM meta WHERE key = 'launchedAt'"),
-  ]);
-  return {
-    live: num(live.rows[0]?.n),
-    last12h: num(last12h.rows[0]?.n),
-    sinceLaunch: num(total.rows[0]?.n),
-    launchedAt: str(launched.rows[0]?.value, new Date().toISOString()),
-  };
+  if (backend === "memory") return memoryVisitorStats();
+  try {
+    const c = getClient();
+    const now = Date.now();
+    const liveCutoff = new Date(now - 120_000).toISOString();
+    const h12Cutoff = new Date(now - 12 * 3600 * 1000).toISOString();
+    const [live, last12h, total, launched] = await Promise.all([
+      c.execute({
+        sql: "SELECT COUNT(*) AS n FROM visitors WHERE lastSeen >= ?",
+        args: [liveCutoff],
+      }),
+      c.execute({
+        sql: "SELECT COUNT(*) AS n FROM visitors WHERE lastSeen >= ?",
+        args: [h12Cutoff],
+      }),
+      c.execute("SELECT COUNT(*) AS n FROM visitors"),
+      c.execute("SELECT value FROM meta WHERE key = 'launchedAt'"),
+    ]);
+    return {
+      live: num(live.rows[0]?.n),
+      last12h: num(last12h.rows[0]?.n),
+      sinceLaunch: num(total.rows[0]?.n),
+      launchedAt: str(launched.rows[0]?.value, new Date().toISOString()),
+    };
+  } catch (err) {
+    useMemory(err);
+    return memoryVisitorStats();
+  }
 }
 
 export async function revenueStats(): Promise<{
@@ -528,12 +684,18 @@ export async function revenueStats(): Promise<{
   revenueSol: number;
 }> {
   await init();
-  const c = getClient();
-  const r = await c.execute(
-    "SELECT COALESCE(SUM(paidUnits), 0) AS n FROM listings"
-  );
-  const revenueUnits = num(r.rows[0]?.n);
-  return { revenueUnits, revenueSol: revenueUnits / 100 };
+  if (backend === "memory") return memoryRevenue();
+  try {
+    const c = getClient();
+    const r = await c.execute(
+      "SELECT COALESCE(SUM(paidUnits), 0) AS n FROM listings"
+    );
+    const revenueUnits = num(r.rows[0]?.n);
+    return { revenueUnits, revenueSol: revenueUnits / 100 };
+  } catch (err) {
+    useMemory(err);
+    return memoryRevenue();
+  }
 }
 
 export function emptyStats(): VisitorStats & {
@@ -550,23 +712,62 @@ export function emptyStats(): VisitorStats & {
   };
 }
 
+export function emptyStatePayload() {
+  const launchedAt = new Date().toISOString();
+  return {
+    listings: [] as Listing[],
+    activity: [] as Activity[],
+    events: [] as Activity[],
+    count: 0,
+    revenueUnits: 0,
+    revenueSol: 0,
+    live: 0,
+    last12h: 0,
+    sinceLaunch: 0,
+    launchedAt,
+    visitors: {
+      live: 0,
+      last12h: 0,
+      sinceLaunch: 0,
+      launchedAt,
+    },
+  };
+}
+
 
 export async function getMeta(key: string): Promise<string | null> {
   await init();
-  const c = getClient();
-  const r = await c.execute({
-    sql: "SELECT value FROM meta WHERE key = ?",
-    args: [key],
-  });
-  if (!r.rows.length || r.rows[0].value == null) return null;
-  return str(r.rows[0].value);
+  if (backend === "memory") {
+    return (memory ?? useMemory("getMeta")).meta.get(key) ?? null;
+  }
+  try {
+    const c = getClient();
+    const r = await c.execute({
+      sql: "SELECT value FROM meta WHERE key = ?",
+      args: [key],
+    });
+    if (!r.rows.length || r.rows[0].value == null) return null;
+    return str(r.rows[0].value);
+  } catch (err) {
+    useMemory(err);
+    return (memory ?? useMemory("getMeta")).meta.get(key) ?? null;
+  }
 }
 
 export async function setMeta(key: string, value: string): Promise<void> {
   await init();
-  const c = getClient();
-  await c.execute({
-    sql: "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
-    args: [key, value],
-  });
+  if (backend === "memory") {
+    (memory ?? useMemory("setMeta")).meta.set(key, value);
+    return;
+  }
+  try {
+    const c = getClient();
+    await c.execute({
+      sql: "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",
+      args: [key, value],
+    });
+  } catch (err) {
+    useMemory(err);
+    (memory ?? useMemory("setMeta")).meta.set(key, value);
+  }
 }

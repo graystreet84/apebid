@@ -38,14 +38,19 @@ function decorate(a: {
 }
 
 export async function GET() {
-  const store = await readStore();
-  const events = [...(store.activity || [])]
-    .sort(
-      (a, b) =>
-        new Date(b.createdAt || b.at || 0).getTime() -
-        new Date(a.createdAt || a.at || 0).getTime()
-    )
-    .slice(0, 40)
-    .map(decorate);
-  return NextResponse.json({ events, activity: events });
+  try {
+    const store = await readStore();
+    const events = [...(store.activity || [])]
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt || b.at || 0).getTime() -
+          new Date(a.createdAt || a.at || 0).getTime()
+      )
+      .slice(0, 40)
+      .map(decorate);
+    return NextResponse.json({ events, activity: events });
+  } catch (err) {
+    console.error("/api/activity failed", err);
+    return NextResponse.json({ events: [], activity: [] });
+  }
 }
