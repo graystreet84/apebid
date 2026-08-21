@@ -20,7 +20,6 @@ files.push({
   file: ".env.production",
   data:
     "NEXT_PUBLIC_TREASURY_ADDRESS=Csx6qmKTzcrSQAVjRRygMQ8RqRJcAPiDNJD5ZnbZyQmt\n" +
-    "NEXT_PUBLIC_SOLANA_RPC=https://api.mainnet-beta.solana.com\n" +
     "DEV_FAKE_TX=false\n" +
     "NEXT_PUBLIC_DEV_FAKE_TX=false\n",
 });

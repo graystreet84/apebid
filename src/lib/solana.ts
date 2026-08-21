@@ -1,6 +1,7 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
-import { SOLANA_RPC, TREASURY_ADDRESS } from "./constants";
+import { TREASURY_ADDRESS } from "./constants";
+import { serverRpcUrl } from "./rpc";
 import {
   BID_MAX_AGE_SECONDS,
   isMemoProgramId,
@@ -30,7 +31,7 @@ export function treasuryAddress(): string {
 }
 
 export function rpcUrl(): string {
-  return SOLANA_RPC || process.env.NEXT_PUBLIC_SOLANA_RPC || "https://api.mainnet-beta.solana.com";
+  return serverRpcUrl();
 }
 
 export type ParsedIxLike = {

@@ -9,6 +9,17 @@ import { bidMemoData, BID_MAX_AGE_SECONDS, MEMO_PROGRAM_ID } from "../src/lib/me
 import { isAllowedClickUrl } from "../src/lib/validate";
 import { canAcceptPaidBid, durableStoreConfigured, hostedStoreConfigured } from "../src/lib/store";
 import { neonUrl } from "../src/lib/storeNeon";
+import {
+  BLOCKED_OFFICIAL_RPC,
+  PUBLIC_FALLBACK_RPC,
+  clientRequestOrigin,
+  isAllowedRpcMethod,
+  isBlockedOfficialRpc,
+  isSameOriginRequest,
+  rpcBurstLimited,
+  serverRpcUrl,
+} from "../src/lib/rpc";
+import { RPC_PROXY_PATH, clientRpcEndpoint } from "../src/lib/constants";
 
 const TREASURY = "Csx6qmKTzcrSQAVjRRygMQ8RqRJcAPiDNJD5ZnbZyQmt";
 const MINT = "So11111111111111111111111111111111111111112";
@@ -200,6 +211,94 @@ test("DATABASE_URL counts as a hosted store on Vercel", () => {
   } finally {
     restoreEnv(prev);
   }
+});
+
+test("official public RPC is treated as blocked", () => {
+  assert.equal(isBlockedOfficialRpc(BLOCKED_OFFICIAL_RPC), true);
+  assert.equal(isBlockedOfficialRpc(BLOCKED_OFFICIAL_RPC + "/"), true);
+  assert.equal(isBlockedOfficialRpc(PUBLIC_FALLBACK_RPC), false);
+});
+
+test("serverRpcUrl prefers SOLANA_RPC and skips official public RPC", () => {
+  const prev = {
+    SOLANA_RPC: process.env.SOLANA_RPC,
+    NEXT_PUBLIC_SOLANA_RPC: process.env.NEXT_PUBLIC_SOLANA_RPC,
+  };
+  try {
+    delete process.env.SOLANA_RPC;
+    process.env.NEXT_PUBLIC_SOLANA_RPC = BLOCKED_OFFICIAL_RPC;
+    assert.equal(serverRpcUrl(), PUBLIC_FALLBACK_RPC);
+
+    process.env.NEXT_PUBLIC_SOLANA_RPC = PUBLIC_FALLBACK_RPC;
+    assert.equal(serverRpcUrl(), PUBLIC_FALLBACK_RPC);
+
+    process.env.SOLANA_RPC = "https://example-rpc.invalid";
+    process.env.NEXT_PUBLIC_SOLANA_RPC = BLOCKED_OFFICIAL_RPC;
+    assert.equal(serverRpcUrl(), "https://example-rpc.invalid");
+  } finally {
+    restoreEnv(prev);
+  }
+});
+
+test("rpc proxy allowlist covers bid path and blocks admin methods", () => {
+  assert.equal(isAllowedRpcMethod("getLatestBlockhash"), true);
+  assert.equal(isAllowedRpcMethod("getSignatureStatuses"), true);
+  assert.equal(isAllowedRpcMethod("sendTransaction"), true);
+  assert.equal(isAllowedRpcMethod("getParsedTransaction"), true);
+  assert.equal(isAllowedRpcMethod("getRecentPrioritizationFees"), true);
+  assert.equal(isAllowedRpcMethod("simulateTransaction"), true);
+  assert.equal(isAllowedRpcMethod("requestAirdrop"), false);
+  assert.equal(isAllowedRpcMethod("getAccountInfo"), false);
+  assert.equal(isAllowedRpcMethod("send"), false);
+});
+
+test("rpc proxy is same-origin only", () => {
+  const req = (headers: Record<string, string>, url = "https://apebid.lol/api/rpc") =>
+    new Request(url, { method: "POST", headers });
+
+  assert.equal(
+    isSameOriginRequest(
+      req({ origin: "https://apebid.lol", host: "apebid.lol", "x-forwarded-proto": "https" })
+    ),
+    true
+  );
+  assert.equal(
+    isSameOriginRequest(
+      req({
+        referer: "https://apebid.lol/bid",
+        host: "apebid.lol",
+        "x-forwarded-proto": "https",
+      })
+    ),
+    true
+  );
+  assert.equal(
+    isSameOriginRequest(
+      req({ origin: "https://evil.example", host: "apebid.lol", "x-forwarded-proto": "https" })
+    ),
+    false
+  );
+  assert.equal(
+    isSameOriginRequest(req({ host: "apebid.lol", "x-forwarded-proto": "https" })),
+    false
+  );
+  assert.equal(clientRequestOrigin(req({ origin: "https://apebid.lol" })), "https://apebid.lol");
+});
+
+test("rpc burst limiter trips after the window max", () => {
+  const key = `test-${Date.now()}-${Math.random()}`;
+  const now = 1_800_000_000_000;
+  for (let i = 0; i < 40; i += 1) {
+    assert.equal(rpcBurstLimited(key, now, 10_000, 40), false);
+  }
+  assert.equal(rpcBurstLimited(key, now, 10_000, 40), true);
+  assert.equal(rpcBurstLimited(key, now + 10_000, 10_000, 40), false);
+});
+
+test("client wallet RPC is same-origin proxy, not official public RPC", () => {
+  assert.equal(RPC_PROXY_PATH, "/api/rpc");
+  assert.equal(clientRpcEndpoint(), "/api/rpc");
+  assert.equal(clientRpcEndpoint().includes("api.mainnet-beta.solana.com"), false);
 });
 
 function restoreEnv(prev: Record<string, string | undefined>) {
