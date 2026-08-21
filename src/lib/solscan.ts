@@ -219,19 +219,23 @@ export function inspectExplorerTransfer(
     }
   }
 
-  if (ex.memos.length && !ex.memos.some((m) => memoMatchesMint(m, mint))) {
-    return { ok: false, error: "Payment memo does not match this listing." };
-  }
-
   const needed = unitsToLamports(payUnits);
-  if (ex.treasuryLamports <= 0) {
-    return { ok: false, error: "Transaction not found / not confirmed yet." };
-  }
-  if (ex.treasuryLamports < needed) {
+  if (ex.treasuryLamports > 0 && ex.treasuryLamports < needed) {
     return {
       ok: false,
       error: `Amount mismatch: treasury gained ${ex.treasuryLamports} lamports, expected ${needed}.`,
     };
+  }
+
+  if (!ex.memos.length) {
+    return { ok: false, error: "Transaction not found / not confirmed yet." };
+  }
+  if (!ex.memos.some((m) => memoMatchesMint(m, mint))) {
+    return { ok: false, error: "Payment memo does not match this listing." };
+  }
+
+  if (ex.treasuryLamports <= 0) {
+    return { ok: false, error: "Transaction not found / not confirmed yet." };
   }
   return { ok: true };
 }

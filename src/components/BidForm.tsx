@@ -16,6 +16,10 @@ import { bidMemoData, MEMO_PROGRAM_ID } from "@/lib/memo";
 import { formatSol, solToUnits, unitsToSol, type RankedListing } from "@/lib/types";
 import { parseIdentity } from "@/lib/validate";
 import { previewRank } from "@/lib/ranking";
+import {
+  BID_RECORD_RETRY_WINDOW_MS,
+  recordBidWithRetry,
+} from "@/lib/bidRecord";
 import { WalletButton } from "./WalletButton";
 
 const FAKE_ON = process.env.NEXT_PUBLIC_DEV_FAKE_TX === "true";
@@ -35,6 +39,7 @@ export function BidForm({ listings, onDone }: Props) {
   const [amount, setAmount] = useState(String(MIN_SOL));
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pendingSig, setPendingSig] = useState<string | null>(null);
 
   useEffect(() => {
     const onClaim = (e: Event) => {
@@ -85,6 +90,16 @@ export function BidForm({ listings, onDone }: Props) {
     };
     if (!res.ok || !data.ok) throw new Error(data.error || "bid failed");
     return data;
+  }
+
+  async function recordPaidBid(sig: string) {
+    return recordBidWithRetry({
+      post: () => postBid(sig),
+      windowMs: BID_RECORD_RETRY_WINDOW_MS,
+      onRetry: () => {
+        setStatus(`recording ${sig.slice(0, 8)}… still confirming. do not send again`);
+      },
+    });
   }
 
   async function onApe() {
@@ -175,9 +190,11 @@ export function BidForm({ listings, onDone }: Props) {
 
       setStatus("waiting for wallet sig…");
       const sig = await sendTransaction(tx, connection);
+      setPendingSig(sig);
       setStatus(`recording ${sig.slice(0, 8)}… do not send again`);
       try {
-        const data = await postBid(sig);
+        const data = await recordPaidBid(sig);
+        setPendingSig(null);
         setStatus(
           `listed at #${data.rank} · paid ${formatSol(data.paidUnits || payUnits)} SOL`
         );
@@ -190,6 +207,27 @@ export function BidForm({ listings, onDone }: Props) {
       }
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "tx failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onRetryRecord() {
+    if (!pendingSig) return;
+    setBusy(true);
+    setStatus(`recording ${pendingSig.slice(0, 8)}… do not send again`);
+    try {
+      const data = await recordPaidBid(pendingSig);
+      setPendingSig(null);
+      setStatus(
+        `listed at #${data.rank} · paid ${formatSol(data.paidUnits || payUnits)} SOL`
+      );
+      onDone();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "bid failed";
+      setStatus(
+        `paid on-chain. recording failed: ${message}. do not send a second payment. sig: ${pendingSig}`
+      );
     } finally {
       setBusy(false);
     }
@@ -327,12 +365,22 @@ export function BidForm({ listings, onDone }: Props) {
       <div className="mt-4 flex flex-wrap gap-3">
         <button
           type="button"
-          disabled={busy}
+          disabled={busy || Boolean(pendingSig)}
           onClick={onApe}
           className="ugly-cta w-full px-5 py-3 font-smash text-2xl sm:w-auto"
         >
           {busy ? "APING…" : "Ape the board"}
         </button>
+        {pendingSig && !busy && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onRetryRecord}
+            className="border-2 border-yell bg-black px-4 py-2 font-bold text-yell hover:bg-yell hover:text-black disabled:opacity-50"
+          >
+            recording — retry this signature
+          </button>
+        )}
         {FAKE_ON && (
           <button
             type="button"

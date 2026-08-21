@@ -14,8 +14,14 @@ import {
   inspectTransfer,
   parseHistoryMemo,
   signaturesMatch,
+  usedSignatureExists,
   type ParsedTxLike,
 } from "../src/lib/solana";
+import {
+  BID_RECORD_RETRY_WINDOW_MS,
+  isRetryableRecordError,
+  recordBidWithRetry,
+} from "../src/lib/bidRecord";
 import {
   inspectExplorerTransfer,
   parseSolscanPayload,
@@ -188,7 +194,7 @@ test("20-minute-old transfer is accepted within the 1 hour verify window", () =>
   assert.ok(BID_MAX_AGE_SECONDS >= 60 * 60);
 });
 
-test("finalized status is accepted when parsed tx is missing", () => {
+test("finalized status is rejected when parsed tx is missing", () => {
   const check = decideTransferVerification({
     status: { err: null, confirmationStatus: "finalized" },
     tx: null,
@@ -196,10 +202,11 @@ test("finalized status is accepted when parsed tx is missing", () => {
     mint: MINT,
     treasury: TREASURY,
   });
-  assert.equal(check.ok, true);
+  assert.equal(check.ok, false);
+  if (!check.ok) assert.match(check.error, /not found|not confirmed yet/);
 });
 
-test("confirmed status is accepted when parsed tx is missing", () => {
+test("confirmed status is rejected when parsed tx is missing", () => {
   const check = decideTransferVerification({
     status: { err: null, confirmationStatus: "confirmed" },
     tx: null,
@@ -207,7 +214,21 @@ test("confirmed status is accepted when parsed tx is missing", () => {
     mint: MINT,
     treasury: TREASURY,
   });
-  assert.equal(check.ok, true);
+  assert.equal(check.ok, false);
+  if (!check.ok) assert.match(check.error, /not found|not confirmed yet/);
+});
+
+test("landed status + no parsed tx + no explorer is not ok", () => {
+  const check = decideTransferVerification({
+    status: { err: null, confirmationStatus: "finalized" },
+    tx: null,
+    explorer: null,
+    payUnits: 5,
+    mint: MINT,
+    treasury: TREASURY,
+  });
+  assert.equal(check.ok, false);
+  if (!check.ok) assert.match(check.error, /not found|not confirmed yet/);
 });
 
 test("missing parsed tx is rejected without a landed status", () => {
@@ -247,7 +268,7 @@ test("parsed tx still enforces memo when statuses are finalized", () => {
   if (!check.ok) assert.match(check.error, /does not match/);
 });
 
-test("Solscan success + treasury amount accepts without memo", () => {
+test("explorer success + amount ok + empty memos is not ok (retry)", () => {
   const now = 1_800_000_000;
   const parsed = parseSolscanPayload(
     {
@@ -265,11 +286,13 @@ test("Solscan success + treasury amount accepts without memo", () => {
   assert.ok(parsed);
   assert.equal(parsed?.success, true);
   assert.equal(parsed?.treasuryLamports, 50_000_000);
+  assert.deepEqual(parsed?.memos, []);
   const check = inspectExplorerTransfer(parsed, 5, MINT, { nowSec: now });
-  assert.equal(check.ok, true);
+  assert.equal(check.ok, false);
+  if (!check.ok) assert.match(check.error, /not found|not confirmed yet/);
 
   const viaDecide = decideTransferVerification({
-    status: null,
+    status: { err: null, confirmationStatus: "finalized" },
     tx: null,
     explorer: parsed,
     payUnits: 5,
@@ -277,7 +300,123 @@ test("Solscan success + treasury amount accepts without memo", () => {
     nowSec: now,
     treasury: TREASURY,
   });
+  assert.equal(viaDecide.ok, false);
+  if (!viaDecide.ok) assert.match(viaDecide.error, /not found|not confirmed yet/);
+});
+
+test("explorer success + amount ok + matching memo is ok", () => {
+  const now = 1_800_000_000;
+  const explorer = {
+    success: true,
+    blockTime: now - 30,
+    treasuryLamports: 50_000_000,
+    memos: [bidMemoData(MINT)],
+  };
+  const check = inspectExplorerTransfer(explorer, 5, MINT, { nowSec: now });
+  assert.equal(check.ok, true);
+
+  const viaDecide = decideTransferVerification({
+    status: null,
+    tx: null,
+    explorer,
+    payUnits: 5,
+    mint: MINT,
+    nowSec: now,
+    treasury: TREASURY,
+  });
   assert.equal(viaDecide.ok, true);
+});
+
+test("explorer success + amount ok + wrong memo is memo mismatch", () => {
+  const now = 1_800_000_000;
+  const explorer = {
+    success: true,
+    blockTime: now - 30,
+    treasuryLamports: 50_000_000,
+    memos: [bidMemoData(OTHER)],
+  };
+  const check = inspectExplorerTransfer(explorer, 5, MINT, { nowSec: now });
+  assert.equal(check.ok, false);
+  if (!check.ok) assert.match(check.error, /does not match/);
+
+  const viaDecide = decideTransferVerification({
+    status: { err: null, confirmationStatus: "confirmed" },
+    tx: null,
+    explorer,
+    payUnits: 5,
+    mint: MINT,
+    nowSec: now,
+    treasury: TREASURY,
+  });
+  assert.equal(viaDecide.ok, false);
+  if (!viaDecide.ok) assert.match(viaDecide.error, /does not match/);
+});
+
+test("inspectable parsed tx still wins and stays strict", () => {
+  const now = 1_800_000_000;
+  const explorer = {
+    success: true,
+    blockTime: now - 30,
+    treasuryLamports: 50_000_000,
+    memos: [bidMemoData(MINT)],
+  };
+  const wrongMemoTx = mockTx({
+    lamports: 50_000_000,
+    memo: bidMemoData(OTHER),
+    blockTime: now - 30,
+  });
+  const reject = decideTransferVerification({
+    status: { err: null, confirmationStatus: "finalized" },
+    tx: wrongMemoTx,
+    explorer,
+    payUnits: 5,
+    mint: MINT,
+    nowSec: now,
+    treasury: TREASURY,
+  });
+  assert.equal(reject.ok, false);
+  if (!reject.ok) assert.match(reject.error, /does not match/);
+
+  const goodTx = mockTx({ lamports: 50_000_000, blockTime: now - 30 });
+  const accept = decideTransferVerification({
+    status: null,
+    tx: goodTx,
+    explorer: null,
+    payUnits: 5,
+    mint: MINT,
+    nowSec: now,
+    treasury: TREASURY,
+  });
+  assert.equal(accept.ok, true);
+
+  const underpayTx = mockTx({ lamports: 49_000_000, blockTime: now - 30 });
+  const underpay = decideTransferVerification({
+    status: { err: null, confirmationStatus: "finalized" },
+    tx: underpayTx,
+    explorer,
+    payUnits: 5,
+    mint: MINT,
+    nowSec: now,
+    treasury: TREASURY,
+  });
+  assert.equal(underpay.ok, false);
+  if (!underpay.ok) assert.match(underpay.error, /Amount mismatch/);
+});
+
+test("explorer overpay still passes when memo matches (seen >= needed)", () => {
+  const now = 1_800_000_000;
+  const check = inspectExplorerTransfer(
+    {
+      success: true,
+      blockTime: now - 30,
+      treasuryLamports: 80_000_000,
+      memos: [bidMemoData(MINT)],
+    },
+    5,
+    MINT,
+    { nowSec: now }
+  );
+  assert.equal(check.ok, true);
 });
 
 test("failed or missing Solscan does not accept a garbage signature", () => {
@@ -335,6 +474,17 @@ test("failed or missing Solscan does not accept a garbage signature", () => {
   );
   assert.equal(shortAmount.ok, false);
   if (!shortAmount.ok) assert.match(shortAmount.error, /Amount mismatch/);
+});
+
+test("used signature replay is case-insensitive", () => {
+  const onchain =
+    "4PzFiN3Prk21y93C6qUV4ajfQRn1wUr5eNJWiyEMht1bXuA4zJGDgGmvb5aqCKEyhzT63sFmW3XYJJ3fDcey8BhT";
+  const typed =
+    "4PzFiN3Prk21y93C6qUV4ajfQRn1wUr5eNJWiyEMHt1bXuA4zJGDgGmvb5aqCKEyhzT63sFmW3XYJJ3fDcey8BhT";
+  assert.equal(usedSignatureExists([onchain], typed), true);
+  assert.equal(usedSignatureExists([onchain], onchain), true);
+  assert.equal(usedSignatureExists([], typed), false);
+  assert.equal(usedSignatureExists([onchain], "other"), false);
 });
 
 test("treasury history matches the paid sig even when explorer case differs", () => {
@@ -585,6 +735,7 @@ test("browser bid/wallet sources never call official public RPC", () => {
     "src/components/Providers.tsx",
     "src/lib/bidPreflight.ts",
     "src/lib/bidConfirm.ts",
+    "src/lib/bidRecord.ts",
     "src/lib/constants.ts",
   ];
   for (const file of files) {
@@ -599,8 +750,65 @@ test("BidForm posts the signature immediately and does not wait to confirm", () 
   const src = readFileSync(join(root, "src/components/BidForm.tsx"), "utf8");
   assert.match(src, /sendTransaction\(tx, connection\)/);
   assert.match(src, /postBid\(sig\)/);
+  assert.match(src, /recordPaidBid\(sig\)/);
+  assert.match(src, /recordBidWithRetry/);
+  assert.match(src, /recording — retry this signature/);
   assert.equal(src.includes("waitForSignatureLanded"), false);
   assert.equal(src.includes("confirmTransaction"), false);
+  assert.equal(/paste[\s\S]{0,40}signature/i.test(src), false);
+  assert.equal(src.includes("claimSignature"), false);
+});
+
+test("not-confirmed record errors retry; memo and amount errors do not", () => {
+  assert.equal(
+    isRetryableRecordError("Transaction not found / not confirmed yet."),
+    true
+  );
+  assert.equal(isRetryableRecordError("Payment memo does not match this listing."), false);
+  assert.equal(isRetryableRecordError("Amount mismatch: treasury gained 1 lamports, expected 50000000."), false);
+  assert.equal(isRetryableRecordError("Transaction failed on-chain."), false);
+  assert.ok(BID_RECORD_RETRY_WINDOW_MS >= 90_000);
+});
+
+test("recordBidWithRetry posts immediately then retries the same signature", async () => {
+  let n = 0;
+  let t = 0;
+  const posted: number[] = [];
+  const result = await recordBidWithRetry({
+    post: async () => {
+      n += 1;
+      posted.push(t);
+      if (n < 3) throw new Error("Transaction not found / not confirmed yet.");
+      return { ok: true, n };
+    },
+    windowMs: 10_000,
+    now: () => t,
+    sleep: async (ms) => {
+      t += ms;
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.n, 3);
+  assert.equal(n, 3);
+  assert.equal(posted[0], 0);
+});
+
+test("recordBidWithRetry does not retry a memo mismatch", async () => {
+  let n = 0;
+  await assert.rejects(
+    () =>
+      recordBidWithRetry({
+        post: async () => {
+          n += 1;
+          throw new Error("Payment memo does not match this listing.");
+        },
+        windowMs: 10_000,
+        now: () => 0,
+        sleep: async () => {},
+      }),
+    /does not match/
+  );
+  assert.equal(n, 1);
 });
 
 test("landed or expired blockhash still records the bid", () => {

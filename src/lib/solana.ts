@@ -250,7 +250,6 @@ export function decideTransferVerification(opts: {
     }
   }
 
-  if (signatureLandedOk(opts.status)) return { ok: true };
   return { ok: false, error: "Transaction not found / not confirmed yet." };
 }
 
@@ -265,6 +264,13 @@ export type TreasurySigInfo = {
 
 export function signaturesMatch(a: string, b: string): boolean {
   return a === b || a.toLowerCase() === b.toLowerCase();
+}
+
+export function usedSignatureExists(
+  used: string[] | undefined,
+  sig: string
+): boolean {
+  return (used ?? []).some((s) => signaturesMatch(s, sig));
 }
 
 export function parseHistoryMemo(memo: string | null | undefined): string | null {
