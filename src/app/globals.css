@@ -91,6 +91,10 @@ a:hover {
   opacity: 0.5;
 }
 
+#bid-form {
+  scroll-margin-top: 1rem;
+}
+
 @media (max-width: 640px) {
   .ugly-box {
     box-shadow: 3px 3px 0 #ff2d95;
