@@ -23,7 +23,7 @@ const smash = Anton({
 
 export const dynamic = "force-dynamic";
 
-const OG = "Where will you be on the leaderboard when this goes viral?";
+const OG = "Promote your favorite memecoin. Rule the board.";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://www.apebid.lol"),
