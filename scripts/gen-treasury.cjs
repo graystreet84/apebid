@@ -8,7 +8,7 @@ const env = [
   'NEXT_PUBLIC_TREASURY_ADDRESS=' + pub,
   'DEV_FAKE_TX=true',
   'NEXT_PUBLIC_DEV_FAKE_TX=true',
-  'NEXT_PUBLIC_SOLANA_RPC=https://api.mainnet-beta.solana.com',
+  '# SOLANA_RPC=https://solana-rpc.publicnode.com',
   ''
 ].join('\n');
 fs.writeFileSync(path.join(__dirname, '..', '.env.local'), env);

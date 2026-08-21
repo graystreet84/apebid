@@ -14,7 +14,7 @@ Use 3001 if 3000 is taken. Preview on this box: http://localhost:3001
 ## Env
 
 NEXT_PUBLIC_TREASURY_ADDRESS = PLACEHOLDER unused Keypair (not Chris)
-NEXT_PUBLIC_SOLANA_RPC = https://api.mainnet-beta.solana.com
+# SOLANA_RPC = optional server-only URL (never NEXT_PUBLIC_ for paid keys)
 DEV_FAKE_TX=true
 NEXT_PUBLIC_DEV_FAKE_TX=true
 
