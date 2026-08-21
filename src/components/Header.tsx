@@ -5,9 +5,9 @@ import { WalletButton } from "./WalletButton";
 
 export function Header() {
   return (
-    <header className="flex flex-wrap items-center justify-between gap-3 border-b-4 border-acid bg-black px-4 py-3">
+    <header className="flex flex-wrap items-center justify-between gap-3 border-b-4 border-acid bg-black px-3 py-2 sm:px-4 sm:py-3">
       <Link href="/" className="no-underline">
-        <span className="font-smash text-3xl tracking-tight text-acid drop-shadow-[3px_3px_0_#ff2d95] sm:text-4xl">
+        <span className="font-smash text-2xl tracking-tight text-acid drop-shadow-[3px_3px_0_#ff2d95] sm:text-4xl">
           APEBID.LOL
         </span>
       </Link>
@@ -18,7 +18,6 @@ export function Header() {
         <Link href="/rules" className="font-bold text-hot">
           /rules
         </Link>
-        <span className="blink font-smash text-xs text-acid">● LIVE</span>
         <WalletButton />
       </nav>
     </header>

@@ -7,7 +7,7 @@ export const WalletButton = dynamic(
   {
     ssr: false,
     loading: () => (
-      <span className="inline-block border-2 border-white bg-hot px-3 py-2 text-black font-bold">
+      <span className="inline-block border border-white bg-hot px-3 py-1.5 text-sm font-bold text-black">
         wallet…
       </span>
     ),

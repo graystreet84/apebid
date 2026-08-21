@@ -1,6 +1,6 @@
 export default function RulesPage() {
   return (
-    <main className="mx-auto max-w-2xl px-4 py-10">
+    <main className="mx-auto max-w-2xl px-3 py-8 sm:px-4 sm:py-12">
       <p className="mb-6 text-xs uppercase tracking-widest text-ape-pink">
         <a href="/">← board</a>
       </p>

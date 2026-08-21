@@ -16,6 +16,13 @@ body {
   font-family: "Comic Sans MS", "Comic Sans", "Chalkboard SE", "Comic Neue",
     cursive;
   min-height: 100%;
+  overflow-x: hidden;
+}
+
+.smash-hero {
+  letter-spacing: -0.03em;
+  line-height: 0.95;
+  text-shadow: 3px 3px 0 #ff2d95;
 }
 
 body {
@@ -38,16 +45,65 @@ a:hover {
   color: var(--yell);
 }
 
+/* Secondary chrome — cards / feed / board frame. 2px so #1 + CTA can win. */
 .ugly-box {
-  border: 4px solid #fff;
-  box-shadow: 8px 8px 0 #ff2d95;
+  border: 2px solid #fff;
+  box-shadow: 4px 4px 0 #ff2d95;
   background: #140014;
 }
 
 .ugly-box-acid {
-  border: 4px solid #c8ff00;
-  box-shadow: 6px 6px 0 #ffe600;
+  border: 2px solid #c8ff00;
+  box-shadow: 4px 4px 0 #ffe600;
   background: #111;
+}
+
+/* #1 prize card — the only box that still slams */
+.ugly-focus {
+  border: 4px solid #000;
+  box-shadow: 8px 8px 0 #ff2d95;
+  background: #ffe600;
+}
+
+.ugly-input {
+  border: 2px solid #fff;
+  background: #000;
+  color: #c8ff00;
+  outline: none;
+}
+
+.ugly-input:focus {
+  border-color: #c8ff00;
+}
+
+.ugly-cta {
+  border: 4px solid #000;
+  background: #c8ff00;
+  color: #000;
+  box-shadow: 6px 6px 0 #ff2d95;
+}
+
+.ugly-cta:hover {
+  background: #ffe600;
+}
+
+.ugly-cta:disabled {
+  opacity: 0.5;
+}
+
+@media (max-width: 640px) {
+  .ugly-box {
+    box-shadow: 3px 3px 0 #ff2d95;
+  }
+
+  .ugly-box-acid {
+    box-shadow: 3px 3px 0 #ffe600;
+  }
+
+  .ugly-focus,
+  .ugly-cta {
+    box-shadow: 4px 4px 0 #ff2d95;
+  }
 }
 
 @keyframes blink {
@@ -65,10 +121,10 @@ a:hover {
   background-color: #ff2d95 !important;
   color: #000 !important;
   font-weight: 800 !important;
-  border: 3px solid #fff !important;
+  border: 2px solid #fff !important;
   border-radius: 0 !important;
   height: auto !important;
-  padding: 8px 12px !important;
+  padding: 6px 10px !important;
 }
 
 .wallet-adapter-button:hover {
