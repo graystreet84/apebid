@@ -3,7 +3,7 @@ export const LEGACY_MEMO_PROGRAM_ID =
   "Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo";
 
 export const BID_MEMO_PREFIX = "apebid:";
-export const BID_MAX_AGE_SECONDS = 15 * 60;
+export const BID_MAX_AGE_SECONDS = 60 * 60;
 
 export function bidMemoData(mint: string): string {
   return `${BID_MEMO_PREFIX}${mint}`;

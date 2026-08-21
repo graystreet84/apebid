@@ -8,6 +8,11 @@ import {
   isMemoProgramId,
   memoMatchesMint,
 } from "./memo";
+import {
+  fetchSolscanTransfer,
+  inspectExplorerTransfer,
+  type ExplorerTransfer,
+} from "./solscan";
 import { unitsToLamports } from "./types";
 
 export function fakeTxEnabled(): boolean {
@@ -193,6 +198,19 @@ export function inspectTransfer(
   return { ok: true };
 }
 
+export type VerifyResult =
+  | { ok: true; canonicalSignature?: string }
+  | { ok: false; error: string };
+
+export function isDefinitiveVerifyFailure(
+  result: VerifyResult
+): result is { ok: false; error: string } {
+  if (result.ok) return false;
+  return /failed on-chain|too old|Amount mismatch|memo does not match|memo is missing|Treasury address|time is unavailable/.test(
+    result.error
+  );
+}
+
 export function decideTransferVerification(opts: {
   status: SignatureStatusLike;
   tx: ParsedTxLike | null;
@@ -200,7 +218,8 @@ export function decideTransferVerification(opts: {
   mint: string;
   nowSec?: number;
   treasury?: string;
-}): { ok: true } | { ok: false; error: string } {
+  explorer?: ExplorerTransfer | null;
+}): VerifyResult {
   if (opts.status?.err) {
     return { ok: false, error: "Transaction failed on-chain." };
   }
@@ -217,6 +236,13 @@ export function decideTransferVerification(opts: {
     return { ok: false, error: "Transaction failed on-chain." };
   }
 
+  if (opts.explorer) {
+    const explorer = inspectExplorerTransfer(opts.explorer, opts.payUnits, opts.mint, {
+      nowSec: opts.nowSec,
+    });
+    if (explorer.ok || isDefinitiveVerifyFailure(explorer)) return explorer;
+  }
+
   if (tx?.blockTime != null && Number.isFinite(tx.blockTime)) {
     const nowSec = opts.nowSec ?? Math.floor(Date.now() / 1000);
     if (nowSec - tx.blockTime > BID_MAX_AGE_SECONDS) {
@@ -226,6 +252,51 @@ export function decideTransferVerification(opts: {
 
   if (signatureLandedOk(opts.status)) return { ok: true };
   return { ok: false, error: "Transaction not found / not confirmed yet." };
+}
+
+export type TreasurySigInfo = {
+  signature: string;
+  err: unknown;
+  confirmationStatus?: string | null;
+  blockTime?: number | null;
+  memo?: string | null;
+  slot?: number;
+};
+
+export function signaturesMatch(a: string, b: string): boolean {
+  return a === b || a.toLowerCase() === b.toLowerCase();
+}
+
+export function parseHistoryMemo(memo: string | null | undefined): string | null {
+  if (!memo) return null;
+  const trimmed = memo.trim();
+  const prefixed = trimmed.match(/^\[\d+\]\s*([\s\S]+)$/);
+  return (prefixed ? prefixed[1] : trimmed).trim() || null;
+}
+
+export function findTreasurySignature(
+  entries: Array<{
+    signature?: string;
+    err?: unknown;
+    confirmationStatus?: string | null;
+    blockTime?: number | null;
+    memo?: string | null;
+    slot?: number;
+  }>,
+  submitted: string
+): TreasurySigInfo | null {
+  for (const row of entries) {
+    if (!row.signature || !signaturesMatch(row.signature, submitted)) continue;
+    return {
+      signature: row.signature,
+      err: row.err ?? null,
+      confirmationStatus: row.confirmationStatus,
+      blockTime: row.blockTime,
+      memo: parseHistoryMemo(row.memo),
+      slot: row.slot,
+    };
+  }
+  return null;
 }
 
 type JsonRpcResult<T> = { result?: T; error?: { message?: string } };
@@ -300,11 +371,35 @@ async function fetchParsedTxWithRetry(
   return null;
 }
 
-export async function verifyTransfer(
+type TreasuryHistoryRow = {
+  signature?: string;
+  err?: unknown;
+  confirmationStatus?: string | null;
+  blockTime?: number | null;
+  memo?: string | null;
+  slot?: number;
+};
+
+async function fetchTreasuryHistoryFromRpc(
+  url: string
+): Promise<TreasuryHistoryRow[]> {
+  const result = await rpcCall<TreasuryHistoryRow[]>(
+    url,
+    "getSignaturesForAddress",
+    [treasuryAddress(), { limit: 100 }]
+  );
+  return result ?? [];
+}
+
+async function probeSignature(
   signature: string,
   payUnits: number,
   mint: string
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{
+  landedStatus: SignatureStatusLike;
+  lastTx: ParsedTxLike | null;
+  decided: VerifyResult;
+}> {
   let landedStatus: SignatureStatusLike = null;
   let lastTx: ParsedTxLike | null = null;
 
@@ -312,7 +407,11 @@ export async function verifyTransfer(
     try {
       const status = await fetchSignatureStatusFromRpc(url, signature);
       if (status?.err) {
-        return { ok: false, error: "Transaction failed on-chain." };
+        return {
+          landedStatus: status,
+          lastTx,
+          decided: { ok: false, error: "Transaction failed on-chain." },
+        };
       }
       if (signatureLandedOk(status)) landedStatus = status;
     } catch {
@@ -329,19 +428,102 @@ export async function verifyTransfer(
           payUnits,
           mint,
         });
-        if (check.ok || hasInspectableParsedTx(tx)) return check;
+        if (check.ok || hasInspectableParsedTx(tx)) {
+          return { landedStatus, lastTx, decided: check };
+        }
       }
     } catch {
       /* next host */
     }
   }
 
-  return decideTransferVerification({
+  return {
+    landedStatus,
+    lastTx,
+    decided: decideTransferVerification({
+      status: landedStatus,
+      tx: lastTx,
+      payUnits,
+      mint,
+    }),
+  };
+}
+
+async function resolveTreasurySignature(
+  submitted: string
+): Promise<TreasurySigInfo | null> {
+  for (const url of serverRpcCandidates()) {
+    try {
+      const entries = await fetchTreasuryHistoryFromRpc(url);
+      const found = findTreasurySignature(entries, submitted);
+      if (found) return found;
+    } catch {
+      /* next host */
+    }
+  }
+  return null;
+}
+
+export async function verifyTransfer(
+  signature: string,
+  payUnits: number,
+  mint: string
+): Promise<VerifyResult> {
+  const first = await probeSignature(signature, payUnits, mint);
+  if (first.decided.ok || isDefinitiveVerifyFailure(first.decided)) {
+    return first.decided;
+  }
+
+  let landedStatus = first.landedStatus;
+  let lastTx = first.lastTx;
+  let canonical = signature;
+
+  const resolved = await resolveTreasurySignature(signature);
+  if (resolved?.err) {
+    return { ok: false, error: "Transaction failed on-chain." };
+  }
+  if (resolved) {
+    canonical = resolved.signature;
+    if (!landedStatus && !resolved.err) {
+      landedStatus = {
+        err: resolved.err,
+        confirmationStatus: resolved.confirmationStatus,
+      };
+    }
+    if (resolved.signature !== signature) {
+      const second = await probeSignature(resolved.signature, payUnits, mint);
+      if (second.lastTx) lastTx = second.lastTx;
+      if (signatureLandedOk(second.landedStatus)) landedStatus = second.landedStatus;
+      if (second.decided.ok) {
+        return { ...second.decided, canonicalSignature: resolved.signature };
+      }
+      if (isDefinitiveVerifyFailure(second.decided)) return second.decided;
+    }
+  }
+
+  let explorer: ExplorerTransfer | null = null;
+  try {
+    explorer = await fetchSolscanTransfer(canonical, treasuryAddress());
+    if (!explorer && canonical !== signature) {
+      explorer = await fetchSolscanTransfer(signature, treasuryAddress());
+    }
+  } catch {
+    explorer = null;
+  }
+
+  const decided = decideTransferVerification({
     status: landedStatus,
     tx: lastTx,
+    explorer,
     payUnits,
     mint,
   });
+  if (decided.ok) {
+    return canonical !== signature
+      ? { ok: true, canonicalSignature: canonical }
+      : decided;
+  }
+  return decided;
 }
 
 export function expectedLamports(payUnits: number): number {

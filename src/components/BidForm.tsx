@@ -12,11 +12,6 @@ import {
   walletCoversBid,
   walletNeedsSolMessage,
 } from "@/lib/bidPreflight";
-import {
-  fetchSignatureStatus,
-  shouldPostBid,
-  waitForSignatureLanded,
-} from "@/lib/bidConfirm";
 import { bidMemoData, MEMO_PROGRAM_ID } from "@/lib/memo";
 import { formatSol, solToUnits, unitsToSol, type RankedListing } from "@/lib/types";
 import { parseIdentity } from "@/lib/validate";
@@ -180,21 +175,19 @@ export function BidForm({ listings, onDone }: Props) {
 
       setStatus("waiting for wallet sig…");
       const sig = await sendTransaction(tx, connection);
-      setStatus(`confirming ${sig.slice(0, 8)}…`);
-      const outcome = await waitForSignatureLanded(
-        (signature) => fetchSignatureStatus(connection, signature),
-        sig
-      );
-      if (!shouldPostBid(outcome)) {
-        setStatus(outcome.kind === "failed" ? outcome.error : "tx failed");
-        return;
+      setStatus(`recording ${sig.slice(0, 8)}… do not send again`);
+      try {
+        const data = await postBid(sig);
+        setStatus(
+          `listed at #${data.rank} · paid ${formatSol(data.paidUnits || payUnits)} SOL`
+        );
+        onDone();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "bid failed";
+        setStatus(
+          `paid on-chain. recording failed: ${message}. do not send a second payment. sig: ${sig}`
+        );
       }
-      setStatus(`recording ${sig.slice(0, 8)}…`);
-      const data = await postBid(sig);
-      setStatus(
-        `listed at #${data.rank} · paid ${formatSol(data.paidUnits || payUnits)} SOL`
-      );
-      onDone();
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "tx failed");
     } finally {

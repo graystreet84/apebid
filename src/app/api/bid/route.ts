@@ -99,7 +99,12 @@ export async function POST(req: Request) {
         if (!check.ok) {
           throw new HttpError(400, check.error);
         }
+        const canonical = check.canonicalSignature || sig;
+        if (canonical !== sig && store.usedSignatures.includes(canonical)) {
+          throw new HttpError(409, "That signature was already used.");
+        }
         store.usedSignatures.push(sig);
+        if (canonical !== sig) store.usedSignatures.push(canonical);
       }
 
       const now = new Date().toISOString();
