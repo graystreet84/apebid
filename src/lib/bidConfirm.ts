@@ -1,3 +1,4 @@
+import type { Connection } from "@solana/web3.js";
 import { formatSimulateError } from "./bidPreflight";
 
 export type SignatureStatusLike = {
@@ -77,12 +78,7 @@ export async function waitForSignatureLanded(
 }
 
 export async function fetchSignatureStatus(
-  connection: {
-    getSignatureStatuses: (
-      signatures: string[],
-      config?: { searchTransactionHistory?: boolean }
-    ) => Promise<{ value: SignatureStatusLike[] }>;
-  },
+  connection: Pick<Connection, "getSignatureStatuses">,
   signature: string
 ): Promise<SignatureStatusLike> {
   const res = await connection.getSignatureStatuses([signature], {

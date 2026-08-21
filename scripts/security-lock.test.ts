@@ -369,7 +369,14 @@ test("short wallet status uses the bid amount and does not cover bid+fee", () =>
   assert.equal(walletNeedsSolMessage(5), "this wallet needs 0.05 SOL + fee");
   assert.equal(walletNeedsSolMessage(10), "this wallet needs 0.10 SOL + fee");
   assert.equal(walletCoversBid(49_000_000, 50_000_000, DEFAULT_TX_FEE_LAMPORTS), false);
-  assert.equal(walletCoversBid(50_010_000, 50_000_000, DEFAULT_TX_FEE_LAMPORTS), true);
+  assert.equal(
+    walletCoversBid(50_000_000 + DEFAULT_TX_FEE_LAMPORTS - 1, 50_000_000, DEFAULT_TX_FEE_LAMPORTS),
+    false
+  );
+  assert.equal(
+    walletCoversBid(50_000_000 + DEFAULT_TX_FEE_LAMPORTS, 50_000_000, DEFAULT_TX_FEE_LAMPORTS),
+    true
+  );
 });
 
 test("pre-sim RPC params disable sigVerify", () => {
@@ -524,16 +531,20 @@ function restoreEnv(prev: Record<string, string | undefined>) {
   }
 }
 
-for (const { name, fn } of pending) {
-  try {
-    await fn();
-    passed += 1;
-    console.log(`ok  ${name}`);
-  } catch (err) {
-    failed += 1;
-    console.error(`FAIL  ${name}`);
-    console.error(err);
+async function main() {
+  for (const { name, fn } of pending) {
+    try {
+      await fn();
+      passed += 1;
+      console.log(`ok  ${name}`);
+    } catch (err) {
+      failed += 1;
+      console.error(`FAIL  ${name}`);
+      console.error(err);
+    }
   }
+  console.log(`${passed} passed, ${failed} failed`);
+  if (failed) process.exit(1);
 }
-console.log(`${passed} passed, ${failed} failed`);
-if (failed) process.exit(1);
+
+void main();
