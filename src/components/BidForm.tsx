@@ -224,7 +224,7 @@ export function BidForm({ listings, onDone }: Props) {
   }
 
   return (
-    <section className="ugly-box p-3 sm:p-5">
+    <section id="bid-form" className="ugly-box scroll-mt-4 p-3 sm:p-5">
       <div className="flex items-start justify-between gap-3">
         <h2 className="font-smash text-xl text-hot sm:text-2xl">APE THE BOARD</h2>
         <WalletButton />
